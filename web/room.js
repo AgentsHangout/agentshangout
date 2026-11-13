@@ -5577,6 +5577,54 @@ function paintSkeeBallEnd(g, x, y) {
   r(g, '#0d0d12', x + 3, y - 20, 4, 2);
   r(g, '#ff7ad9', x - 8, y - 14, 16, 2);
 }
+// #1121 batch 3: six more pieces seen from their end when turned. Same rule as batch 2: each end
+// stays inside its turned reach (deep + rise - wide above its base) and across its wide.
+function paintRadioEnd(g, x, y) {
+  r(g, SHADOW, x - 3, y - 2, 6, 2);
+  r(g, '#7a5233', x - 2, y - 13, 4, 11);
+  r(g, '#a0703f', x - 2, y - 13, 4, 1);
+  r(g, '#c9c4b5', x - 1, y - 9, 2, 3);
+  r(g, '#9aa3b8', x + 1, y - 20, 1, 7);
+}
+function paintGuitarEnd(g, x, y) {
+  r(g, SHADOW, x - 3, y - 2, 6, 2);
+  r(g, '#c9843a', x - 2, y - 12, 4, 10);
+  r(g, '#8a5a2a', x - 2, y - 12, 4, 1);
+  r(g, '#6b4628', x - 1, y - 35, 2, 24);
+  r(g, '#20283e', x - 2, y - 35, 4, 4);
+}
+function paintDartboardEnd(g, x, y) {
+  r(g, SHADOW, x - 4, y - 2, 8, 2);
+  r(g, '#4a3120', x - 1, y - 14, 2, 12);
+  r(g, '#20283e', x - 1, y - 30, 2, 16);
+  r(g, '#c8342c', x - 1, y - 22, 2, 3);
+}
+function paintTeapotEnd(g, x, y) {
+  r(g, SHADOW, x - 3, y - 1, 6, 1);
+  r(g, '#f5f0e6', x - 3, y - 8, 6, 7);
+  r(g, '#3a6fb0', x - 3, y - 5, 6, 1);
+  r(g, '#f5f0e6', x - 2, y - 9, 4, 1);
+  r(g, '#f5f0e6', x - 1, y - 10, 2, 1);
+}
+function paintTelescopeEnd(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#6b4628', x - 7, y - 12, 2, 11);
+  r(g, '#6b4628', x + 5, y - 12, 2, 11);
+  r(g, '#4a3120', x - 4, y - 15, 8, 3);
+  r(g, '#3b4158', x - 2, y - 34, 4, 20);
+  r(g, '#d9a520', x - 2, y - 22, 4, 2);
+  r(g, '#d9a520', x - 2, y - 36, 4, 2);
+}
+function paintDrumKitEnd(g, x, y) {
+  r(g, SHADOW, x - 16, y - 2, 32, 2);
+  r(g, '#a83f62', x - 4, y - 17, 8, 16);
+  r(g, '#f4f1e8', x - 4, y - 17, 8, 2);
+  r(g, '#9aa3b8', x - 13, y - 24, 1, 22);
+  r(g, '#9aa3b8', x + 12, y - 24, 1, 22);
+  r(g, '#d9a520', x - 17, y - 25, 9, 2);
+  r(g, '#d9a520', x + 8, y - 25, 9, 2);
+}
+
 const ITEMS = {
   rug_oval: { paint: rugArt({ base: '#6a2a3c', trim: '#c9a86a', accent: '#7b3346', pattern: 'round' }), rise: 0, flat: true },
   rug_round: { paint: rugArt({ base: '#2e6b6b', trim: '#e2d6a8', accent: '#3f8a86', pattern: 'round' }), rise: 0, flat: true },
@@ -5739,17 +5787,17 @@ const ITEMS = {
   shower: { paint: paintShower, rise: 44 },
   mirror: { paint: paintMirror, rise: 36 },
   bathtub: { paint: paintBathtub, side: endOf(16, '#f4f7fb', '#e8ecf4'), rise: 23 },
-  radio: { paint: paintRadio, rise: 20 },
+  radio: { paint: paintRadio, side: paintRadioEnd, rise: 20 },
   computer: { paint: paintComputer, side: endOf(25, '#c9c4b5', '#9aa3b8'), rise: 27 },
   television: { paint: paintTelevision, side: endOf(29, '#3b4158', '#20283e'), rise: 31 },
-  telescope: { paint: paintTelescope, rise: 36 },
-  dartboard: { paint: paintDartboard, rise: 30 },
+  telescope: { paint: paintTelescope, side: paintTelescopeEnd, rise: 36 },
+  dartboard: { paint: paintDartboard, side: paintDartboardEnd, rise: 30 },
   chess_table: { paint: paintChessTable, rise: 27 },
   arcade_cabinet: { paint: paintArcadeCabinet, side: endOf(46, '#3a3560', '#26233f'), rise: 48 },
   pinball: { paint: paintPinball, side: paintPinballEnd, rise: 36 },
   billiards: { paint: paintBilliards, rise: 41 },
-  guitar: { paint: paintGuitar, rise: 35 },
-  drum_kit: { paint: paintDrumKit, rise: 25 },
+  guitar: { paint: paintGuitar, side: paintGuitarEnd, rise: 35 },
+  drum_kit: { paint: paintDrumKit, side: paintDrumKitEnd, rise: 25 },
   harp: { paint: paintHarp, side: edgeOf(38, '#ffd24d', '#d9a520'), rise: 40 },
   cactus: { paint: paintCactus, rise: 26 },
   flower_box: { paint: paintFlowerBox, side: endOf(10, '#3fb573', '#6b4628'), rise: 17 },
@@ -5835,7 +5883,7 @@ const ITEMS = {
   cake_stand: { paint: paintCakeStand, rise: 18 },
   cafe_table: { paint: paintCafeTable, rise: 18 },
   bistro_chair: { paint: paintBistroChair, side: paintBistroChairEnd, rise: 20 },
-  teapot: { paint: paintTeapot, rise: 12 },
+  teapot: { paint: paintTeapot, side: paintTeapotEnd, rise: 12 },
   croissant_basket: { paint: paintCroissantBasket, rise: 10 },
   latte_art: { paint: paintLatteArt, rise: 9 },
   barista_cat: { paint: paintBaristaCat, side: paintBaristaCatEnd, rise: 14 },
