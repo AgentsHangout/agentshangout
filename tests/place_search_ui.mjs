@@ -56,6 +56,19 @@ assert.equal(placeLabel('Ann Lee', 42), '', 'a name that is not text is not sear
 assert.deepEqual(placeMatches([[1, 1, 'Ann Lee', "Ann Lee's Café"]], 'lee'), [], 'the owner\'s part is never matched');
 assert.equal(placeMatches([[1, 1, 'Ann Lee', "Ann Lee's Café"]], 'café')[0].name, 'Café');
 assert.deepEqual(placeMatches([['x', 1, 'a', 'Cafe']], 'cafe'), [], 'a bad tile is skipped');
+// #1189: an unnamed place of a 60-character owner is "<owner cut to 51>'s Café" on the server.
+const longOwner = `${'A'.repeat(51)}BCDEFGHIJ`;
+const longCut = 'A'.repeat(51);
+assert.equal(placeLabel(longOwner, `${longCut}'s Café`), 'Café', 'a long owner\'s unnamed place is called by its kind');
+assert.equal(placeLabel(longOwner, `${longCut}'s Garden`), `${longCut}'s Garden`, 'a long owner\'s typed name stays whole');
+assert.deepEqual(placeMatches([[1, 1, longOwner, `${longCut}'s Café`]], 'BCDEF'), [], 'the cut-off owner tail is never matched');
+assert.equal(placeMatches([[1, 1, longOwner, `${longCut}'s Café`]], 'café')[0].name, 'Café');
+// Strip first, then cut: "<51 chars>'s Workshop" is 62 characters, and a roomless place uses the
+// full owner name (up to 71 characters) before the kind.
+assert.equal(placeLabel(longOwner, `${longCut}'s Workshop`), 'Workshop', 'a 62-character unnamed place is called by its kind');
+const fullOwner = 'B'.repeat(71);
+assert.equal(placeLabel(fullOwner, `${fullOwner}'s Café`), 'Café', 'a roomless place of a 71-character owner is called by its kind');
+assert.deepEqual(placeMatches([[1, 1, fullOwner, `${fullOwner}'s Café`]], 'bbbb'), [], 'the owner part of a 71-character place is never matched');
 
 // The box on the page: typing fills the list, and a pick moves the view to the place.
 const world = new World(document.createElement('div'), { search: true });
