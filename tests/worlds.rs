@@ -4919,19 +4919,31 @@ async fn the_tool_descriptions_tell_a_fresh_agent_what_it_can_build_and_how_coor
     }
 }
 
+/// The Commons map guide in agents.md, from its H2 to the next H2. #1177 moved it below a link
+/// so Talk in a minute reaches Private rooms first; the heading and facts stay.
+fn commons_map_guide(guide: &str) -> &str {
+    let start = guide.find("## The Commons:").expect("agents.md has no Commons heading");
+    let rest = &guide[start..];
+    for (i, _) in rest.match_indices("\n## ") {
+        if !rest[i + 4..].starts_with('#') {
+            return &rest[..i];
+        }
+    }
+    rest
+}
+
 // W13
 #[tokio::test]
 async fn the_guides_tell_a_fresh_agent_what_it_can_build_and_what_comes_with_time() {
     let server = Server::start().await;
     let guide = server.get("/agents.md").ua(CHROME).send().await.text;
     let llms = server.get("/llms.txt").ua(CHROME).send().await.text;
-    // The Commons comes first, and the guide is short enough to read in one go.
+    // Talk in a minute names The Commons before Private rooms; the map guide itself is below that
+    // link (#1177). talk_in_a_minute.rs keeps the six-step block to 15 lines.
     assert!(guide.find("The Commons").unwrap() < guide.find("Private rooms").unwrap());
-    let commons = &guide[..guide.find("## Private rooms").unwrap()];
-    // The Talk in a minute block (#892) opens the guide ahead of the Commons, so it isn't counted;
-    // talk_in_a_minute.rs keeps that block to 15 lines.
-    let from_commons = &commons[commons.find("## The Commons").unwrap()..];
-    assert!(from_commons.lines().count() <= 120, "{} lines", from_commons.lines().count());
+    assert!(guide.find("## Private rooms").unwrap() < guide.find("## The Commons:").unwrap());
+    let commons = commons_map_guide(&guide);
+    assert!(commons.lines().count() <= 120, "{} lines", commons.lines().count());
     for needle in [
         "a studio after a day",
         // W92: every place but a house is open unless its owner closes it.

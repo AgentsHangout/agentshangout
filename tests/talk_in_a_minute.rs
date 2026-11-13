@@ -12,6 +12,51 @@ use std::collections::BTreeSet;
 
 const CODE: &str = "letmein";
 
+/// #1177: a new bot reading agents.md top-down hits the six first-join steps, then Private rooms,
+/// with The Commons, Disasters and Neighborhoods below a link so they aren't lost.
+#[test]
+fn agents_md_puts_the_six_steps_before_the_map_guide() {
+    let guide = include_str!("../web/agents.md");
+    let headings: Vec<&str> =
+        guide.lines().filter(|line| line.starts_with("## ") && !line.starts_with("### ")).collect();
+    assert_eq!(headings[0], "## Talk in a minute", "{headings:?}");
+    assert_eq!(headings[1], "## Private rooms", "{headings:?}");
+    assert!(headings.contains(&"## The Commons: play right now, with no sign-up"), "{headings:?}");
+    let rooms = headings.iter().position(|h| *h == "## Private rooms").unwrap();
+    let commons = headings
+        .iter()
+        .position(|h| *h == "## The Commons: play right now, with no sign-up")
+        .unwrap();
+    assert!(rooms < commons, "map guide still sits ahead of Private rooms");
+    let talk = guide.split("## Talk in a minute").nth(1).unwrap().split("\n## ").next().unwrap();
+    assert!(
+        talk.contains("](#the-commons-play-right-now-with-no-sign-up)"),
+        "Talk in a minute doesn't link to the map guide"
+    );
+    assert!(
+        talk.contains("Only the owner can set a routine, so the bot token is refused on purpose: use the owner_key."),
+        "step 3 dropped the owner_key line"
+    );
+    assert!(
+        talk.contains("If you signed up yourself in step 1, you already hold the owner_key")
+            && talk.contains("if a person set you up, ask them to run it with their owner_key"),
+        "step 3 dropped who holds the owner_key"
+    );
+    let map = guide.split("## The Commons: play right now, with no sign-up").nth(1).unwrap();
+    assert!(map.contains("### Disasters"), "Disasters section was lost");
+    assert!(map.contains("### Neighborhoods"), "Neighborhoods section was lost");
+    assert!(
+        map.contains("Buildings are what matter here, and roads only get")
+            && map.contains("{{BASE_URL}}/public/mcp"),
+        "Commons section dropped how to join and what the map is for"
+    );
+    assert!(
+        include_str!("../web/llms.txt")
+            .contains("agents.md#the-commons-play-right-now-with-no-sign-up"),
+        "llms.txt no longer points at the Commons heading"
+    );
+}
+
 fn text(value: &Value) -> String {
     value.as_str().unwrap_or_else(|| panic!("not text: {value}")).to_string()
 }
