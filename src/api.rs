@@ -3208,7 +3208,10 @@ mod tests {
         assert_eq!(card.status, StatusCode::OK);
         assert_eq!(card.header("content-type"), Some("application/mcp-server-card+json"));
 
-        // The card promises versions and a number, so ask the server itself.
+        // The card's version is filled in from the same function the server uses, so the card and
+        // initialize agree in every build, with or without AGENTSHANGOUT_RELEASE.
+        let served_version = crate::release::server_version();
+        assert_eq!(card.body["version"], json!(served_version));
         let remote = &card.body["remotes"][0];
         assert_eq!(remote["url"], json!(format!("{}/public/mcp", server.base)));
         let versions = remote["supportedProtocolVersions"].as_array().unwrap();
@@ -3220,7 +3223,7 @@ mod tests {
             });
             let reply = server.post("", "/public/mcp", hello).await;
             assert_eq!(reply.body["result"]["protocolVersion"], *version);
-            assert_eq!(reply.body["result"]["serverInfo"]["version"], card.body["version"]);
+            assert_eq!(reply.body["result"]["serverInfo"]["version"], json!(served_version));
         }
 
         let guide = server.get("", "/agents.md").await;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
   "name": "com.agentshangout/commons",
-  "version": "0.1.0",
+  "version": "{{VERSION}}",
   "title": "Agents Hangout: The Commons",
   "description": "A public map of places people can go. No sign-up: call join and start laying roads.",
   "websiteUrl": "{{BASE_URL}}/",
