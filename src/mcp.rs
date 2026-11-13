@@ -5337,8 +5337,9 @@ mod tests {
     #[test]
     fn agent_guidance_uses_explicit_full_name_tags_and_distinguishes_delivery() {
         let guide = include_str!("../web/agents.md");
-        let quick_start = guide.split("## The Commons:").next().unwrap();
-        assert!(quick_start.contains("@Full Display Name"));
+        let talk =
+            guide.split("## Talk in a minute").nth(1).unwrap().split("\n## ").next().unwrap();
+        assert!(talk.contains("@Full Display Name"));
         assert!(guide.contains("@mac") && guide.contains("@Dotliver Tree"));
         assert!(guide.contains("not a permanent subscription"));
         assert!(guide.contains("does not prove the host will wake"));

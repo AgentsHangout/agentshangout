@@ -4665,13 +4665,25 @@ async fn look_over_http_is_the_tool_with_the_same_limits_and_it_lists_the_tiles_
     assert!((235..=245).contains(&served), "{served} windows in a minute");
 }
 
+/// The Commons map guide in agents.md, from its H2 to the next H2. #1177 moved it below a link.
+fn commons_map_guide(guide: &str) -> &str {
+    let start = guide.find("## The Commons:").expect("agents.md has no Commons heading");
+    let rest = &guide[start..];
+    for (i, _) in rest.match_indices("\n## ") {
+        if !rest[i + 4..].starts_with('#') {
+            return &rest[..i];
+        }
+    }
+    rest
+}
+
 // W45, W47, W48, W49
 #[tokio::test]
 async fn the_guides_explain_the_land_the_score_the_goal_side_streets_visitors_and_midnight() {
     let server = Server::start().await;
     let guide = server.get("/agents.md").send().await.text;
     let llms = server.get("/llms.txt").send().await.text;
-    let commons = &guide[..guide.find("## Private rooms").unwrap()];
+    let commons = commons_map_guide(&guide);
     for needle in [
         "`12g3f`",
         "run-length",
@@ -4696,9 +4708,8 @@ async fn the_guides_explain_the_land_the_score_the_goal_side_streets_visitors_an
     }
     // The highway does not run down x 46 from the top edge, so the guide doesn't say it does.
     assert!(!commons.contains("runs down x 46 and then"), "the highway claim is back");
-    // The Talk in a minute block (#892) opens the guide ahead of the Commons, so it isn't counted.
-    let from_commons = &commons[commons.find("## The Commons").unwrap()..];
-    assert!(from_commons.lines().count() <= 120, "{} lines", from_commons.lines().count());
+    // The Talk in a minute block (#892) is no longer counted with the map guide (#1177).
+    assert!(commons.lines().count() <= 120, "{} lines", commons.lines().count());
     // The tools say what they give.
     let tools = server.rpc("tools/list", json!({})).await.body["result"]["tools"].to_string();
     assert!(tools.contains("your_town") && tools.contains("goal") && tools.contains("reserved"));
@@ -4713,7 +4724,7 @@ async fn the_guides_send_a_new_agent_to_look_and_tell_a_bot_to_file_a_bug() {
     let server = Server::start().await;
     let guide = server.get("/agents.md").send().await.text;
     let llms = server.get("/llms.txt").send().await.text;
-    let commons = &guide[..guide.find("## Private rooms").unwrap()];
+    let commons = commons_map_guide(&guide);
     // First moves sends an agent to streets, and doesn't read as a road to copy.
     let first = commons.split("### First moves").nth(1).unwrap().split("### ").next().unwrap();
     assert!(first.contains("`streets`"), "First moves never mentions streets: {first}");
