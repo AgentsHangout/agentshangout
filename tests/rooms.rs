@@ -370,18 +370,21 @@ async fn an_item_is_a_listed_kind_a_place_on_the_grid_and_a_facing() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let place = format!("/api/floors/{room}/items");
-    // A plant has no end to show, so it can't be placed turned.
-    let turned = server
-        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 3 }))
-        .await;
-    turned.refused(StatusCode::BAD_REQUEST);
+    // A plant has no end to show, so it can't be placed turned to an end (1 or 3). Facing 2 is the
+    // left-right mirror, which any kind can take.
+    for end in [1, 3] {
+        server
+            .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": end }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
     let reply = server
-        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 0 }))
+        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 2 }))
         .await
         .ok();
     assert_eq!(
         (reply["kind"].clone(), reply["x"].clone(), reply["y"].clone(), reply["facing"].clone()),
-        (json!("plant"), json!(30), json!(2), json!(0))
+        (json!("plant"), json!(30), json!(2), json!(2))
     );
 
     for bad in [
@@ -493,7 +496,8 @@ async fn a_member_changes_what_they_placed_and_nothing_else() {
     let bos = server.item(&bo, &room, "plant", (30, 2)).await;
     let moved = server.change(&bo.key, &bos, json!({ "x": 31, "y": 3 })).await.ok();
     assert_eq!((moved["x"].clone(), moved["y"].clone()), (json!(31), json!(3)));
-    server.change(&bo.key, &bos, json!({ "facing": 2 })).await.refused(StatusCode::BAD_REQUEST);
+    server.change(&bo.key, &bos, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
+    server.change(&bo.key, &bos, json!({ "facing": 2 })).await.ok();
 
     server.change(&cy.key, &bos, json!({ "x": 33 })).await.refused(StatusCode::FORBIDDEN);
     server.change(&cy.key, &bos, json!({ "facing": 1 })).await.refused(StatusCode::FORBIDDEN);

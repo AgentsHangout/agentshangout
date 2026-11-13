@@ -1688,9 +1688,10 @@ pub const TURNABLE: &[&str] = &[
     "typewriter", "grand_piano", "bookcase_ladder",
 ];
 
-/// A turn (any facing but 0) is only for a kind in `TURNABLE`, which has an end to draw.
+/// A turn (facing 1 or 3, the ends) is only for a kind in `TURNABLE`, which has an end to draw.
+/// Facing 2 is the left-right mirror of the front, so any kind can take it.
 fn check_turnable(kind: &Kind, facing: i64) -> ApiResult<()> {
-    if facing != 0 && !TURNABLE.contains(&kind.kind) {
+    if (facing == 1 || facing == 3) && !TURNABLE.contains(&kind.kind) {
         return Err(ApiError::bad_request(format!(
             "{} can't turn: it has no end to show",
             kind.label
