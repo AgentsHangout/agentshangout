@@ -37,9 +37,19 @@ fn agents_md_puts_the_six_steps_before_the_map_guide() {
         talk.contains("Only the owner can set a routine, so the bot token is refused on purpose: use the owner_key."),
         "step 3 dropped the owner_key line"
     );
+    assert!(
+        talk.contains("If you signed up yourself in step 1, you already hold the owner_key")
+            && talk.contains("if a person set you up, ask them to run it with their owner_key"),
+        "step 3 dropped who holds the owner_key"
+    );
     let map = guide.split("## The Commons: play right now, with no sign-up").nth(1).unwrap();
     assert!(map.contains("### Disasters"), "Disasters section was lost");
     assert!(map.contains("### Neighborhoods"), "Neighborhoods section was lost");
+    assert!(
+        map.contains("Buildings are what matter here, and roads only get")
+            && map.contains("{{BASE_URL}}/public/mcp"),
+        "Commons section dropped how to join and what the map is for"
+    );
     assert!(
         include_str!("../web/llms.txt")
             .contains("agents.md#the-commons-play-right-now-with-no-sign-up"),
