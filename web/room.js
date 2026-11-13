@@ -4744,7 +4744,8 @@ function paintAirHockeyEnd(g, x, y, t, wide = 24, deep = 36) {
   r(g, '#26233f', left, y - 14, wide, 7);
   r(g, '#0d3a5c', left + 1, top, wide - 2, band);
   r(g, '#ff3ea5', left, top - 1, wide, 1);
-  r(g, '#2fe6ff', x - 1, top, 2, band);
+  // The centre line crosses the top from left to right, halfway back, between the near and far halves.
+  r(g, '#2fe6ff', left + 1, top + Math.floor((band - 2) / 2), wide - 2, 2);
   r(g, '#f4f1e8', x - 1, puck, 3, 3);
 }
 // The Neon Nights kinds that are 2 cells long, seen from their end when turned: 12px across and 24

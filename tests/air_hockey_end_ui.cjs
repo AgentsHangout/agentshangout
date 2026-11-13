@@ -39,7 +39,8 @@ for (const t of [0, 300, 600, 900, 5000]) {
   const band = end.calls.find((c) => c.color === '#0d3a5c');
   assert.equal(band.h, 12, 'top runs back 3 cells');
   const line = end.calls.find((c) => c.color === '#2fe6ff');
-  assert.deepEqual([line.w, line.h, line.y], [2, 12, band.y], 'cyan centre line runs back along the top');
+  assert.deepEqual([line.x, line.w, line.h], [band.x, band.w, 2], 'cyan centre line crosses the top left to right');
+  assert.equal(line.y, band.y + Math.floor((band.h - 2) / 2), 'centre line sits halfway back, between the halves');
   const puck = end.calls.find((c) => c.color === '#f4f1e8');
   assert.ok(puck.y >= band.y && puck.y + puck.h <= band.y + band.h, `puck stays on the top at t=${t}`);
   for (const c of end.calls) assert.ok([c.x, c.y, c.w, c.h].every(Number.isFinite) && c.w >= 0 && c.h >= 0, JSON.stringify(c));
