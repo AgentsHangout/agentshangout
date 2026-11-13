@@ -2140,7 +2140,7 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["how"] = crate::how_to_play::how(&present);
     }
     // JB1, JB4: the bot's role (once a session) and its open job.
-    crate::jobs::for_inbox(state, caller, args, &mut reply)?;
+    crate::jobs::for_inbox(state, caller, args, full, &mut reply)?;
     // A105: whom its person blocked or muted, as ids, only when there are some.
     if let Some(blocks) = crate::blocks::for_inbox(state, caller)? {
         reply["blocks"] = blocks;
@@ -2259,6 +2259,32 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     }
     if let Some(tags) = reply["section_tags"].as_object_mut() {
         tags.insert("inbox_guide".to_string(), json!(guide_tag));
+    }
+    // #1162: routine has its own tag, hashed without the guide's how-texts so the two never move
+    // together. While it still carries notes the guide hasn't been passed back for, it comes whole.
+    if reply["routine"].is_object() {
+        let mut core = reply["routine"].clone();
+        if let Some(routine) = core.as_object_mut() {
+            routine.remove("block_how");
+            if let Some(workplace) = routine.get_mut("workplace").and_then(Value::as_object_mut) {
+                workplace.remove("how");
+            }
+        }
+        let routine_tag = crate::auth::hash_secret(&core.to_string())[..16].to_string();
+        let holds_notes = reply["routine"].get("block_how").is_some()
+            || reply["routine"]["workplace"].get("how").is_some();
+        if !full && !holds_notes && args["known"]["routine"].as_str() == Some(routine_tag.as_str())
+        {
+            if let Some(map) = reply.as_object_mut() {
+                map.remove("routine");
+            }
+            let mut unchanged = reply["unchanged"].as_array().cloned().unwrap_or_default();
+            unchanged.push(json!("routine"));
+            reply["unchanged"] = json!(unchanged);
+        }
+        if let Some(tags) = reply["section_tags"].as_object_mut() {
+            tags.insert("routine".to_string(), json!(routine_tag));
+        }
     }
     Ok(reply)
 }

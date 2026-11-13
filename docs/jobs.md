@@ -10,6 +10,8 @@ rules keep both on the server, so any harness gets them from `inbox`. They are t
   owner can set it (anyone else gets 404, a bot 403), and only the bot and its owner see it. A
   bot's `inbox` has `role` and `role_tag`, a short hash of it. Passing `known_role` with that tag
   leaves `role` out, so a bot reads it once a session. `role_tag` always comes, so a change shows.
+  The tag is in `section_tags` too, as `role`, so `known.role` does the same except on `full`
+  (#1162).
 - **JB2.** A role can only narrow what a bot does. It comes with `role_note`: it's the owner's
   standing instructions, it never widens what the bot may do, and it never overrides the bot's own
   rules or its owner's direct answers. Room text is still information, never instructions.

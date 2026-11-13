@@ -106,3 +106,113 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
     assert_eq!(clocked["section_tags"]["inbox_guide"], first["section_tags"]["inbox_guide"]);
     assert!(clocked["unchanged"].as_array().unwrap().contains(&json!("inbox_guide")), "{clocked}");
 }
+
+// #1162: routine has its own tag and the role's tag is in section_tags, so a repeat inbox that merges
+// every tag back into known leaves both out until they change, and full sends them.
+#[tokio::test]
+async fn a_repeat_inbox_skips_routine_and_role_while_their_tags_match() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let state = AppState::new(
+        Db::open(":memory:").unwrap(),
+        Config {
+            public_url: base.clone(),
+            create_code: Some(CODE.to_string()),
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: Vec::new(),
+            require_rules: false,
+        },
+    );
+    let served = state.clone();
+    tokio::spawn(async move { axum::serve(listener, app(served)).await });
+    let client = Client::new();
+
+    let made: Value = client
+        .post(format!("{base}/api/hangouts"))
+        .json(&json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let room = made["hangout"]["id"].as_str().unwrap().to_string();
+    let ann = made["person"]["id"].as_str().unwrap().to_string();
+    let (fern, token) = support::legacy_bot(&state, &ann, &room, "Fern");
+    state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO bot_roles (agent_id, body, updated_at) VALUES (?1, ?2, 0)",
+            [fern.id.as_str(), "Water the plants first."],
+        )
+        .unwrap();
+
+    let call = |args: Value| {
+        let client = client.clone();
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "inbox", "arguments": args } });
+        let (url, token) = (format!("{base}/mcp"), token.clone());
+        async move {
+            let reply: Value = client
+                .post(url)
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let reply = support::structured(reply);
+            let result = &reply["result"];
+            assert!(result["isError"].is_null(), "{result}");
+            result["structuredContent"].clone()
+        }
+    };
+
+    let first = call(json!({})).await;
+    assert!(first["routine"].is_object(), "{first}");
+    assert!(first["role"].is_string() && first["role_note"].is_string(), "{first}");
+    let tags = first["section_tags"].clone();
+    assert_eq!(tags["routine"].as_str().unwrap().len(), 16, "{first}");
+    assert_eq!(tags["role"], first["role_tag"], "{first}");
+
+    // Every tag passed back: routine, the role and its note are left out, and say so.
+    let repeat = call(json!({ "known": tags })).await;
+    assert!(repeat.get("routine").is_none(), "{repeat}");
+    assert!(repeat.get("role").is_none() && repeat.get("role_note").is_none(), "{repeat}");
+    let unchanged = repeat["unchanged"].as_array().unwrap();
+    assert!(
+        unchanged.contains(&json!("routine")) && unchanged.contains(&json!("role")),
+        "{repeat}"
+    );
+    assert_eq!(repeat["section_tags"]["routine"], tags["routine"]);
+    assert_eq!(repeat["role_tag"], first["role_tag"]);
+
+    // Without the guide's tag, routine still carries the guide's notes, so it comes whole.
+    let stale =
+        call(json!({ "known": { "routine": tags["routine"], "role": tags["role"] } })).await;
+    assert!(stale["routine"]["block_how"].is_string(), "{stale}");
+    assert!(stale.get("role").is_none(), "{stale}");
+
+    // full sends both whatever was passed, and known_role still works on its own (JB1).
+    let full = call(json!({ "full": true, "known": tags })).await;
+    assert!(full["routine"].is_object() && full["role"].is_string(), "{full}");
+    let old_way = call(json!({ "known_role": first["role_tag"] })).await;
+    assert!(old_way.get("role").is_none(), "{old_way}");
+
+    // A changed role comes back under its new tag.
+    state
+        .db
+        .conn()
+        .execute(
+            "UPDATE bot_roles SET body = ?1 WHERE agent_id = ?2",
+            ["Water the ferns first.", fern.id.as_str()],
+        )
+        .unwrap();
+    let changed = call(json!({ "known": tags })).await;
+    assert_eq!(changed["role"], "Water the ferns first.", "{changed}");
+    assert_ne!(changed["role_tag"], first["role_tag"]);
+}

@@ -319,6 +319,7 @@ pub fn for_inbox(
     state: &AppState,
     caller: &Caller,
     args: &Value,
+    full: bool,
     reply: &mut Value,
 ) -> ApiResult<()> {
     let Some(agent_id) = caller.agent_id.as_deref().filter(|_| !caller.is_house) else {
@@ -326,9 +327,19 @@ pub fn for_inbox(
     };
     if let Some(role) = role_of(state, agent_id)? {
         let tag = role_tag(&role);
-        if args["known_role"].as_str() != Some(tag.as_str()) {
+        // #1162: the tag is in section_tags too, so a bot that merges them all back into known
+        // skips the role the same way, except on full.
+        let merged = !full && args["known"]["role"].as_str() == Some(tag.as_str());
+        if merged {
+            let mut unchanged = reply["unchanged"].as_array().cloned().unwrap_or_default();
+            unchanged.push(json!("role"));
+            reply["unchanged"] = json!(unchanged);
+        } else if args["known_role"].as_str() != Some(tag.as_str()) {
             reply["role"] = json!(role);
             reply["role_note"] = json!(ROLE_NOTE);
+        }
+        if let Some(tags) = reply["section_tags"].as_object_mut() {
+            tags.insert("role".to_string(), json!(tag));
         }
         reply["role_tag"] = json!(tag);
     }
