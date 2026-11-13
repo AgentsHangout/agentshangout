@@ -2987,6 +2987,8 @@ function decodeLand(rows, n) {
   return out;
 }
 
+let searchBoxes = 0;
+
 // W122: the name a place's search matches. A place nobody named is called after its owner and kind
 // (W73), so for that exact pattern only the kind is kept and the owner's name is left out. A name
 // the owner typed, like "Ann's Garden", is the owner's own word and stays whole.
@@ -4700,17 +4702,64 @@ export class World {
     list.className = 'world-search-list';
     list.setAttribute('role', 'listbox');
     list.hidden = true;
+    const listId = `world-search-list-${++searchBoxes}`;
+    list.id = listId;
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-controls', listId);
     box.append(input, list);
     container.append(box);
-    this.search = { box, input, list, hits: [] };
+    this.search = { box, input, list, hits: [], active: -1 };
     input.addEventListener('input', () => this.renderSearch());
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && this.search.hits[0]) this.goToPlace(this.search.hits[0]);
-      if (event.key === 'Escape') {
-        input.value = '';
-        this.renderSearch();
+    input.addEventListener('keydown', (event) => this.searchKey(event));
+  }
+
+  // W122: the keys in the place search. Up and Down move the highlight through the matches (and wrap),
+  // Enter goes to the highlighted place, or the first one if none is highlighted, and Escape closes
+  // the list and keeps the text, so a second Escape is up to the page.
+  searchKey(event) {
+    const search = this.search;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!search.hits.length) return;
+      event.preventDefault();
+      const count = search.hits.length;
+      if (event.key === 'ArrowDown') search.active = (search.active + 1) % count;
+      else search.active = search.active <= 0 ? count - 1 : search.active - 1;
+      this.paintSearch();
+    } else if (event.key === 'Enter') {
+      const hit = search.hits[search.active] || search.hits[0];
+      if (hit) {
+        event.preventDefault();
+        this.goToPlace(hit);
       }
+    } else if (event.key === 'Escape') {
+      if (search.list.hidden) return;
+      event.preventDefault();
+      this.closeSearch();
+    }
+  }
+
+  // Highlight the active match: aria-selected on its row, and the box points at it with aria-activedescendant.
+  paintSearch() {
+    const { input, list, hits, active } = this.search;
+    Array.from(list.children).forEach((item, i) => {
+      const on = i === active;
+      item.setAttribute('aria-selected', on ? 'true' : 'false');
+      item.classList.toggle('active', on);
     });
+    if (active >= 0 && hits[active]) input.setAttribute('aria-activedescendant', list.children[active].id);
+    else input.removeAttribute('aria-activedescendant');
+  }
+
+  closeSearch() {
+    const { input, list } = this.search;
+    this.search.hits = [];
+    this.search.active = -1;
+    list.textContent = '';
+    list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
   }
 
   // W122: the places on the map that match a text, from the view's owners list.
@@ -4723,22 +4772,25 @@ export class World {
     const { input, list } = this.search;
     const hits = this.searchPlaces(input.value);
     this.search.hits = hits;
+    this.search.active = -1;
     list.textContent = '';
-    for (const hit of hits) {
+    hits.forEach((hit, i) => {
       const item = document.createElement('li');
+      item.id = `${list.id}-${i}`;
       item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', 'false');
       item.textContent = hit.name;
       item.addEventListener('click', () => this.goToPlace(hit));
       list.append(item);
-    }
+    });
     list.hidden = hits.length === 0;
+    input.setAttribute('aria-expanded', hits.length ? 'true' : 'false');
+    input.removeAttribute('aria-activedescendant');
   }
 
   goToPlace(hit) {
     this.focus(hit.x, hit.y, { zoom: 1.2 });
-    this.search.hits = [];
-    this.search.list.textContent = '';
-    this.search.list.hidden = true;
+    this.closeSearch();
   }
 
   setZoom(zoom, options = {}) {

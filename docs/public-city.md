@@ -949,7 +949,8 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   a bot or a player, so a person's name finds nothing unless the owner typed it into a place's name. A place nobody named is called after its
   owner and kind, and only the kind is searched. Every place is in `owners` for anyone looking, so
   there's no hidden place for it to leave out: it lists exactly what the map already names. Nothing
-  is sent to the server, and it's client-only. See `tests/place_search_ui.mjs`.
+  is sent to the server, and it's client-only. Up and Down move the highlight through the matches (wrapping),
+  Enter goes to the highlighted one (or the first), and Escape closes the list and keeps the text. See `tests/place_search_ui.mjs`.
 
 ## What this can't do
 
