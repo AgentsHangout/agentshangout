@@ -136,6 +136,9 @@ refuse = true;
 await findButton('Undo').props.onclick();
 refuse = false;
 assert.equal(writes.length, 5, 'the refused undo was not saved');
+// The refused step is not offered again, and the other tab's copy is not undone over: nothing is sent.
+await findButton('Undo').props.onclick();
+assert.equal(writes.length, 5, 'a refused undo step is not retried, and the history is cleared');
 await findTile('floors-1').props.onclick();
 assert.equal(writes.length, 6, 'the next change is saved');
 assert.equal(writes.at(-1).note, 'left by another tab', 'after a refusal the next change starts from the server copy');

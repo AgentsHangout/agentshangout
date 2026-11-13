@@ -416,9 +416,9 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     if (!undo.length) return;
     const back = undo[undo.length - 1];
     undo = undo.slice(0, -1);
+    // A refused Undo is not put back: the server would refuse the same step on every click (#1122).
     const ok = await save(back, { remember: false });
     if (ok) tell('Undone.');
-    else undo = [...undo, back];
   }
 
   // After a refused change: show and keep the server's copy, not this tab's last accepted one.
@@ -426,7 +426,11 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     try {
       const got = await api(urlOf());
       if (era !== session || flying || timer) return;
-      accepted = clone(got.outside || {});
+      const fresh = clone(got.outside || {});
+      // The undo steps are whole documents from before this resync; if the server holds something else,
+      // an Undo would wipe what another tab added, so the history goes.
+      if (!same(accepted, fresh)) undo = [];
+      accepted = fresh;
       shown = accepted;
       changed(where.x, where.y, accepted);
       repaint();
