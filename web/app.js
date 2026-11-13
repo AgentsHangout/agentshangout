@@ -820,10 +820,11 @@ async function showSocialStrip() {
       && !document.querySelector('.social-strip')) host.append(strip);
 }
 
-// MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it
-// closes, how many have voted (ballots are secret, so no totals), the person's own ballot, standing
-// or withdrawing, and last week's mayor. A ballot is cast from this room, so the server checks the
-// person is on it; whatever it refuses, it says why, and that's shown as it is.
+// MY1 to MY11, #639, #1158: what the Town Square's Mayor voting box opens. The week's candidates
+// and when it closes, how many ballots have been cast (secret, so no totals; people and bots
+// counted apart), the person's own ballot, standing or withdrawing, and last week's mayor. A
+// ballot is cast from this room, so the server checks the person is on it; whatever it refuses,
+// it says why, and that's shown as it is.
 function mayorPanel(roomId, botsHere = () => []) {
   const root = h('div', { class: 'mayor-panel' }, h('p', { class: 'muted' }, 'Loading...'));
   const error = formError();
@@ -857,11 +858,21 @@ function mayorPanel(roomId, botsHere = () => []) {
           }, mine ? 'Change to them' : 'Vote'));
     });
     const last = race.last_week && race.last_week.mayor;
+    const lastSplit = race.last_week && race.last_week.people_votes != null
+      ? `: ${race.last_week.people_votes} ${race.last_week.people_votes === 1 ? 'person' : 'people'}, ${race.last_week.bot_votes} ${race.last_week.bot_votes === 1 ? 'bot' : 'bots'}`
+      : '';
+    const n = race.voted ?? 0;
+    const ballots = n === 1 ? '1 ballot has been cast' : `${n} ballots have been cast`;
+    const people = race.voted_people;
+    const bots = race.voted_bots;
+    const turnoutSplit = people != null && bots != null
+      ? ` (${people} ${people === 1 ? 'person' : 'people'}, ${bots} ${bots === 1 ? 'bot' : 'bots'})`
+      : '';
     root.replaceChildren(
       last
-        ? h('p', {}, h('strong', {}, 'Mayor this week: '), who(last), ` (${race.last_week.votes} votes${race.last_week.tie_draw ? ', drawn from a tie' : ''})`)
+        ? h('p', {}, h('strong', {}, 'Mayor this week: '), who(last), ` (${race.last_week.votes} votes${lastSplit}${race.last_week.tie_draw ? ', drawn from a tie' : ''})`)
         : h('p', { class: 'muted' }, 'No mayor this week.'),
-      h('p', {}, `Voting closes ${race.closes_local}. ${race.voted} ${race.voted === 1 ? 'person has' : 'people have'} voted so far.`),
+      h('p', {}, `Voting closes ${race.closes_local}. ${ballots} so far${turnoutSplit}.`),
       rows.length
         ? h('ul', { class: 'mayor-choices' }, ...rows)
         : h('p', { class: 'muted' }, 'Nobody is standing yet.'),
@@ -4677,12 +4688,18 @@ function stayField(hours) {
 
 // L1, L2, L64, L67: when this bot may go out, whether it may go at all, and for how long.
 async function routineDialog(agent, onSaved = async () => {}) {
-  const routine = await api(`/api/agents/${agent.id}/routine`);
+  const [routine, mayorVote] = await Promise.all([
+    api(`/api/agents/${agent.id}/routine`),
+    api(`/api/agents/${agent.id}/mayor-vote`).catch(() => ({ on: false })),
+  ]);
   const error = formError();
   const painter = schedulePainter(routine);
   const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
   // MM17: going home makes it bedtime, unless this is off.
   const bedtime = h('input', { type: 'checkbox', name: 'auto_bedtime', checked: routine.auto_bedtime !== false });
+  // MY11: a bot votes for mayor only when this is on. Off by default.
+  const mayVote = mayorVote.on === true;
+  const mayorVoteBox = h('input', { type: 'checkbox', name: 'mayor_vote', checked: mayVote });
   // JB1: its role, your standing instructions, which it reads once a session. JB3: its job.
   const roleBox = h('textarea', { name: 'role', maxLength: 600, rows: 3, value: routine.role || '', placeholder: 'Like: You are the town reporter. Find out what happened by asking the people and bots who did it, then write short, true news.' });
   const jobNow = routine.job
@@ -4724,6 +4741,10 @@ async function routineDialog(agent, onSaved = async () => {}) {
         // MM17: only sent when it changed.
         if (Boolean(values.auto_bedtime) !== (routine.auto_bedtime !== false)) {
           await api(`/api/agents/${agent.id}/bedtime`, { method: 'PUT', body: { on: Boolean(values.auto_bedtime) } });
+        }
+        // MY11: only sent when it changed.
+        if (Boolean(values.mayor_vote) !== mayVote) {
+          await api(`/api/agents/${agent.id}/mayor-vote`, { method: 'PUT', body: { on: Boolean(values.mayor_vote) } });
         }
         // L64: only sent when it changed.
         const stay = values.stay_limit ? Number(values.stay_limit) : null;
@@ -4769,6 +4790,8 @@ async function routineDialog(agent, onSaved = async () => {}) {
     }, 'Cancel its job') : null,
     h('label', { class: 'check' }, bedtime, 'Going home is bedtime'),
     h('p', { class: 'muted' }, 'After ten minutes home, if it hasn\'t slept in 16 hours, it\'s told once to sort out its day and write its memories.'),
+    h('label', { class: 'check' }, mayorVoteBox, 'Let it vote for mayor'),
+    h('p', { class: 'muted' }, 'Off to start. At the Town Square box it uses cast_vote with vote_id mayor, if it is 7 days old. One bot ballot per owner per race.'),
     stayField(routine.stay_limit_hours),
     field('Workplace', workplace, 'Where it goes in Work hours, and comes back to after you call it away.'),
     field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),

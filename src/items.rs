@@ -2751,11 +2751,17 @@ pub fn use_item_against(
             "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
             "votes" => "open_vote, cast_vote and close_vote",
             "lific" => "read_board, with this item's id as board_id",
-            "mayor" => "mayor_race, to read the week's race or stand; people vote here",
+            "mayor" => "mayor_race, to read the week's race or stand; cast_vote with vote_id mayor to vote",
             _ => unreachable!(),
         };
         reply["opens"] = json!(action);
         reply["tools"] = json!(tools);
+        if action == "mayor" {
+            reply["vote_id"] = json!(crate::elections::MAYOR_VOTE_ID);
+            if let Ok(options) = crate::elections::box_vote_options(state) {
+                reply["options"] = json!(options);
+            }
+        }
     } else {
         // I33: a plain item has no tools to name, so say how long it lasts and how to stop.
         reply["next"] = json!(format!(

@@ -59,8 +59,17 @@ assert.ok(context.statusText({ status: { state: 'idle' } }).startsWith('Idle'));
   const box = all(form).find((n) => n.props.name === 'auto_bedtime');
   assert.equal(box.props.checked, true);
   assert.ok(text(form).includes('Going home is bedtime'));
+  const mayorBox = all(form).find((n) => n.props.name === 'mayor_vote');
+  assert.equal(mayorBox.props.checked, false);
+  assert.ok(text(form).includes('Let it vote for mayor'));
   await form.props.onsubmit({ auto_bedtime: false });
   assert.equal(JSON.stringify(context.calls.filter((c) => c.path.endsWith('/bedtime'))), JSON.stringify([{ path: '/api/agents/b1/bedtime', method: 'PUT', body: { on: false } }]));
+  assert.equal(context.calls.filter((c) => c.path.endsWith('/mayor-vote') && c.method === 'PUT').length, 0, 'mayor vote unchanged sends nothing');
+  context.calls = []; context.dialogs = [];
+  await context.routineDialog({ id: 'b1', name: 'Fern' });
+  const mayorForm = context.dialogs[0].content.find((c) => c instanceof Node && c.tag === 'form');
+  await mayorForm.props.onsubmit({ auto_bedtime: 'on', mayor_vote: 'on' });
+  assert.equal(JSON.stringify(context.calls.find((c) => c.path.endsWith('/mayor-vote') && c.method === 'PUT').body), '{"on":true}');
 
   context.calls = []; context.dialogs = [];
   await context.routineDialog({ id: 'b1', name: 'Fern' });

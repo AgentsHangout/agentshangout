@@ -2782,6 +2782,31 @@ BEGIN
         WHERE f.hangout_id = OLD.id AND f.status = 'open'
     );
 END;
+-- MY11 (#1158): a bot may vote for mayor only when its owner has turned this on. Off by default.
+-- Read when the ballot is first cast; flipping it later does not change an already-cast ballot.
+CREATE TABLE IF NOT EXISTS mayor_bot_vote_allow (
+    agent_id  TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+    set_at    INTEGER NOT NULL
+);
+-- MY11: each bot's one secret ballot in a week's election. The owner's account id is not stored
+-- here, so a dump of ballots does not name the owner.
+CREATE TABLE IF NOT EXISTS mayor_bot_ballots (
+    election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    cast_at      INTEGER NOT NULL,
+    PRIMARY KEY (election_id, agent_id)
+);
+-- MY11: one counted bot ballot per owner account per race. No candidate, so this mark does not
+-- say who they picked.
+CREATE TABLE IF NOT EXISTS mayor_owner_bot_votes (
+    election_id INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    cast_at     INTEGER NOT NULL,
+    PRIMARY KEY (election_id, owner_id)
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -2811,6 +2836,30 @@ pub struct MayorCandidate {
     pub id: String,
     pub name: String,
 }
+
+/// MY5, MY11: a candidate's count, with people and bot ballots split.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MayorTotal {
+    pub candidate: MayorCandidate,
+    pub votes: i64,
+    pub people: i64,
+    pub bots: i64,
+}
+
+/// MY11: what happened when a bot cast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MayorBotCast {
+    Cast,
+    NotStanding,
+    OwnerVoted,
+}
+
+/// People ballots plus bot ballots for one candidate in one election.
+const MAYOR_VOTE_COUNT: &str =
+    "(SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id)
+                 + (SELECT COUNT(*) FROM mayor_bot_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id)";
 
 const MAYOR_COLS: &str =
     "id, closes_at, opened_at, closed_at, winner_kind, winner_id, winner_name, winner_votes, tie_draw";
@@ -4769,6 +4818,10 @@ fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     end_bot_player_token(tx, agent_id)?;
     // MY2 (#642): a bot that goes stops standing, and the ballots for it go too.
     tx.execute("DELETE FROM mayor_ballots WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
+    tx.execute(
+        "DELETE FROM mayor_bot_ballots WHERE kind = 'bot' AND candidate_id = ?",
+        [agent_id],
+    )?;
     tx.execute("DELETE FROM mayor_candidates WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
     // These hold a bot's address with no foreign key to it.
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
@@ -5478,6 +5531,7 @@ fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusql
     let theirs = "(kind = 'person' AND candidate_id = ?1)
          OR (kind = 'bot' AND candidate_id IN (SELECT id FROM agents WHERE owner_id = ?1))";
     conn.execute(&format!("DELETE FROM mayor_ballots WHERE {theirs}"), [person_id])?;
+    conn.execute(&format!("DELETE FROM mayor_bot_ballots WHERE {theirs}"), [person_id])?;
     conn.execute(&format!("DELETE FROM mayor_candidates WHERE {theirs}"), [person_id])?;
     conn.execute(
         "UPDATE mayor_elections SET winner_kind = 'person', winner_id = ?2, winner_name = ?3
@@ -13277,6 +13331,10 @@ impl Db {
             "DELETE FROM mayor_ballots WHERE election_id = ? AND kind = ? AND candidate_id = ?",
             params![election_id, kind, candidate_id],
         )?;
+        tx.execute(
+            "DELETE FROM mayor_bot_ballots WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )?;
         tx.commit()?;
         Ok(gone == 1)
     }
@@ -13302,44 +13360,161 @@ impl Db {
         Ok(changed == 1)
     }
 
-    /// MY4: how many have voted, and this person's own ballot.
-    pub fn mayor_ballots_for(
-        &self,
-        election_id: i64,
-        voter: &str,
-    ) -> rusqlite::Result<(i64, Option<(String, String)>)> {
+    /// MY4: how many people and bots have voted.
+    pub fn mayor_turnout(&self, election_id: i64) -> rusqlite::Result<(i64, i64)> {
         let conn = self.conn();
-        let voted = conn.query_row(
+        let people = conn.query_row(
             "SELECT COUNT(*) FROM mayor_ballots WHERE election_id = ?",
             [election_id],
             |row| row.get(0),
         )?;
-        let mine = conn
+        let bots = conn.query_row(
+            "SELECT COUNT(*) FROM mayor_bot_ballots WHERE election_id = ?",
+            [election_id],
+            |row| row.get(0),
+        )?;
+        Ok((people, bots))
+    }
+
+    /// MY4: this person's own ballot.
+    pub fn mayor_person_ballot(
+        &self,
+        election_id: i64,
+        voter: &str,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
             .query_row(
                 "SELECT kind, candidate_id FROM mayor_ballots WHERE election_id = ? AND voter = ?",
                 params![election_id, voter],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .optional()?;
-        Ok((voted, mine))
+            .optional()
     }
 
-    /// MY4, MY5: the totals for each candidate, most first.
-    pub fn mayor_totals(&self, election_id: i64) -> rusqlite::Result<Vec<(MayorCandidate, i64)>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT c.kind, c.candidate_id, c.name,
-                    (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
-                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
-             FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+    /// MY4, MY11: this bot's own ballot.
+    pub fn mayor_bot_ballot(
+        &self,
+        election_id: i64,
+        agent_id: &str,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT kind, candidate_id FROM mayor_bot_ballots
+                 WHERE election_id = ? AND agent_id = ?",
+                params![election_id, agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// MY11: whether this bot's owner has turned on may-vote-for-mayor. Off when there is no row.
+    pub fn mayor_bot_may_vote(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        let allowed: Option<i64> = self
+            .conn()
+            .query_row(
+                "SELECT allowed FROM mayor_bot_vote_allow WHERE agent_id = ?",
+                [agent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(allowed == Some(1))
+    }
+
+    /// MY11: the owner turns a bot's may-vote-for-mayor setting on or off.
+    pub fn set_mayor_bot_may_vote(
+        &self,
+        agent_id: &str,
+        on: bool,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO mayor_bot_vote_allow (agent_id, allowed, set_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (agent_id) DO UPDATE SET allowed = excluded.allowed, set_at = excluded.set_at",
+            params![agent_id, on as i64, at],
         )?;
+        Ok(())
+    }
+
+    /// MY11: casts or changes a bot's ballot. The owner id is written only on the per-race mark,
+    /// never on the ballot row. A second bot of the same owner is `OwnerVoted`.
+    pub fn cast_mayor_bot_ballot(
+        &self,
+        election_id: i64,
+        agent_id: &str,
+        owner_id: &str,
+        kind: &str,
+        candidate_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<MayorBotCast> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if !exists(
+            &tx,
+            "SELECT 1 FROM mayor_candidates WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )? {
+            return Ok(MayorBotCast::NotStanding);
+        }
+        if exists(
+            &tx,
+            "SELECT 1 FROM mayor_bot_ballots WHERE election_id = ? AND agent_id = ?",
+            params![election_id, agent_id],
+        )? {
+            tx.execute(
+                "UPDATE mayor_bot_ballots SET kind = ?, candidate_id = ?, cast_at = ?
+                 WHERE election_id = ? AND agent_id = ?",
+                params![kind, candidate_id, now, election_id, agent_id],
+            )?;
+            tx.commit()?;
+            return Ok(MayorBotCast::Cast);
+        }
+        let taken = tx.execute(
+            "INSERT OR IGNORE INTO mayor_owner_bot_votes (election_id, owner_id, cast_at)
+             VALUES (?, ?, ?)",
+            params![election_id, owner_id, now],
+        )?;
+        if taken == 0 {
+            return Ok(MayorBotCast::OwnerVoted);
+        }
+        tx.execute(
+            "INSERT INTO mayor_bot_ballots (election_id, agent_id, kind, candidate_id, cast_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![election_id, agent_id, kind, candidate_id, now],
+        )?;
+        tx.commit()?;
+        Ok(MayorBotCast::Cast)
+    }
+
+    /// MY4, MY5, MY11: the totals for each candidate, most first, with people and bot counts.
+    pub fn mayor_totals(&self, election_id: i64) -> rusqlite::Result<Vec<MayorTotal>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.kind, c.candidate_id, c.name,
+                    {MAYOR_VOTE_COUNT} AS votes,
+                    (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS people,
+                    (SELECT COUNT(*) FROM mayor_bot_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS bots
+             FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at"
+        ))?;
         let rows = stmt.query_map([election_id], |row| {
-            Ok((
-                MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? },
-                row.get(3)?,
-            ))
+            Ok(MayorTotal {
+                candidate: MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? },
+                votes: row.get(3)?,
+                people: row.get(4)?,
+                bots: row.get(5)?,
+            })
         })?;
         rows.collect()
+    }
+
+    /// Tests only: when the open race was opened, for MY11's start gate.
+    pub fn set_mayor_election_opened_at(&self, opened_at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mayor_elections SET opened_at = ? WHERE closed_at IS NULL",
+            [opened_at],
+        )?;
+        Ok(())
     }
 
     /// MY5: counts an election and closes it with its winner, in one step, so no ballot lands
@@ -13353,12 +13528,11 @@ impl Db {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let totals: Vec<(String, String, String, i64)> = {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare(&format!(
                 "SELECT c.kind, c.candidate_id, c.name,
-                        (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
-                           AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
-                 FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
-            )?;
+                        {MAYOR_VOTE_COUNT} AS votes
+                 FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at"
+            ))?;
             let rows = stmt.query_map([election_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?;

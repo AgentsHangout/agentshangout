@@ -333,6 +333,16 @@ impl Server {
         result["structuredContent"].clone()
     }
 
+    async fn let_vote(&self, owner: &Who, bot: &str, on: bool) {
+        self.put(&owner.key, &format!("/api/agents/{bot}/mayor-vote"), json!({ "on": on }))
+            .await
+            .ok();
+    }
+
+    async fn mayor_cast(&self, token: &str, option: &str) -> Value {
+        self.call(token, "cast_vote", json!({ "vote_id": "mayor", "option": option })).await
+    }
+
     /// The town square, up and open: the god's switch is on from here.
     async fn town_square(&self, god: &Who) -> ((i64, i64), String) {
         self.switch(god, true).await;
@@ -626,7 +636,8 @@ async fn a_door_account_whose_bot_fails_is_not_left_behind() {
 }
 
 // MY1 to MY7 (#639): the Town Square gets its voting box; anyone stands, a person on a public floor
-// votes with a secret ballot, bots and door accounts don't, and Saturday's tally names the mayor.
+// votes with a secret ballot, bots use cast_vote (MY11) not this route, door accounts don't, and
+// Saturday's tally names the mayor.
 #[tokio::test]
 async fn the_week_elects_a_mayor_at_the_town_square() {
     let (server, justin, _) = Server::start().await;
@@ -689,10 +700,16 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
         .refused(StatusCode::FORBIDDEN);
     let voted = server.put(&ann.key, "/api/mayor/ballot", ballot(&square)).await.ok();
     assert_eq!(voted["voted"], 1, "{voted}");
+    assert_eq!(voted["voted_people"], 1, "{voted}");
+    assert_eq!(voted["voted_bots"], 0, "{voted}");
     assert_eq!(voted["your_ballot"]["id"], eagle_id);
     // MY4: no totals while the week is open.
     assert!(!voted.to_string().contains("\"votes\":1"), "{voted}");
-    server.put(&eagle, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    let as_bot = server
+        .put(&eagle, "/api/mayor/ballot", ballot(&square))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(as_bot["error"].as_str().unwrap().contains("cast_vote"), "{as_bot}");
     let (door_room, door) = server.someone("Door").await;
     server.go_in(&door.key, spot).await.ok();
     ready(&door).await;
@@ -731,6 +748,8 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     let after = server.get(&ann.key, "/api/mayor").await.ok();
     assert_eq!(after["last_week"]["mayor"]["name"], "Eagle", "{after}");
     assert_eq!(after["last_week"]["votes"], 2, "Ann's and Dee's");
+    assert_eq!(after["last_week"]["people_votes"], 2, "{after}");
+    assert_eq!(after["last_week"]["bot_votes"], 0, "{after}");
     assert_eq!(after["last_week"]["tie_draw"], false);
     assert_eq!(after["candidates"], json!([]), "a new week starts empty");
 
@@ -752,6 +771,207 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     let gone = server.get(&justin.key, "/api/mayor").await.ok();
     assert_eq!(gone["last_week"]["mayor"]["name"], "Someone who left", "{gone}");
     assert_eq!(gone["candidates"], json!([]), "{gone}");
+}
+
+fn tool_err(result: &Value) -> String {
+    result["content"][0]["text"].as_str().unwrap_or("").to_string()
+}
+
+fn table_columns(server: &Server, table: &str) -> Vec<String> {
+    let conn = server.state.db.conn();
+    let mut stmt = conn.prepare("SELECT name FROM pragma_table_info(?1)").unwrap();
+    stmt.query_map([table], |row| row.get(0)).unwrap().map(Result::unwrap).collect()
+}
+
+// MY11 (#1158): a bot whose owner allowed it votes at the Town Square box through existing
+// `cast_vote` (`vote_id` `mayor`). The race open now stays people-only; bot ballots start after
+// Saturday 14 November 2026, 1:00 PM Central.
+#[tokio::test]
+async fn bots_vote_for_mayor_at_the_town_square_through_cast_vote() {
+    let (server, justin, _) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let (own_room, ann) = server.someone("Ann").await;
+    let (cy_room, cy) = server.someone("Cy").await;
+    server.go_in(&ann.key, spot).await.ok();
+    server.go_in(&cy.key, spot).await.ok();
+    let (eagle_id, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    let (hawk_id, hawk) = server.bot(&ann, &own_room, "Hawk").await;
+    let (pip_id, pip) = server.bot(&cy, &cy_room, "Pip").await;
+    for (owner, bot) in [(&ann, &eagle_id), (&ann, &hawk_id), (&cy, &pip_id)] {
+        server
+            .post(&owner.key, &format!("/api/floors/{square}/walk-in"), json!({ "agent_id": bot }))
+            .await
+            .ok();
+    }
+    let ready = |who: &Who| {
+        server.state.db.backdate_person(&who.id, now() - 8 * 86_400).unwrap();
+        let path = format!("/api/hangouts/{square}");
+        let walk_in = format!("/api/floors/{square}/walk-in");
+        let (server, key) = (&server, who.key.clone());
+        async move {
+            server.post(&key, &walk_in, json!({})).await;
+            server.get(&key, &path).await.ok()
+        }
+    };
+    ready(&ann).await;
+    ready(&cy).await;
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    server.post(&cy.key, "/api/mayor/stand", json!({})).await.ok();
+    let snapshot = server.get(&justin.key, &format!("/api/hangouts/{square}")).await.ok();
+    let box_id = snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "mayor_ballot_box")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ann_opt = format!("person:{}", ann.id);
+    let cy_opt = format!("person:{}", cy.id);
+    let eagle_opt = format!("bot:{eagle_id}");
+    let age = |bot: &str| server.state.db.set_agent_created_at(bot, now() - 8 * 86_400).unwrap();
+
+    // Default off, and GET says so.
+    let setting = server.get(&ann.key, &format!("/api/agents/{eagle_id}/mayor-vote")).await.ok();
+    assert_eq!(setting["on"], false, "{setting}");
+
+    // The race open now stays people-only, even if the switch is on and the bot is old enough.
+    server
+        .state
+        .db
+        .set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM - 1)
+        .unwrap();
+    server.let_vote(&ann, &eagle_id, true).await;
+    age(&eagle_id);
+    let before = server.tool(&eagle, "mayor_race", json!({ "action": "read" })).await;
+    assert_eq!(before["bot_ballots"], false, "{before}");
+    let gated = server.mayor_cast(&eagle, &ann_opt).await;
+    assert_eq!(gated["isError"], true, "{gated}");
+    assert!(tool_err(&gated).contains("people-only"), "{}", tool_err(&gated));
+    let as_person = server
+        .put(
+            &ann.key,
+            "/api/mayor/ballot",
+            json!({ "kind": "person", "id": ann.id, "hangout_id": square }),
+        )
+        .await
+        .ok();
+    assert_eq!(as_person["voted_people"], 1, "{as_person}");
+    assert_eq!(as_person["voted_bots"], 0, "{as_person}");
+
+    // Bot ballots start with races opened at this week's close.
+    server
+        .state
+        .db
+        .set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM)
+        .unwrap();
+    let after_gate = server.tool(&eagle, "mayor_race", json!({ "action": "read" })).await;
+    assert_eq!(after_gate["bot_ballots"], true, "{after_gate}");
+    assert_eq!(after_gate["vote_id"], "mayor");
+
+    // Owner setting off is refused.
+    server.let_vote(&ann, &eagle_id, false).await;
+    let off = server.mayor_cast(&eagle, &ann_opt).await;
+    assert_eq!(off["isError"], true, "{off}");
+    assert!(tool_err(&off).contains("hasn't let you vote"), "{}", tool_err(&off));
+    server.let_vote(&ann, &eagle_id, true).await;
+
+    // A bot under 7 days old is refused. No founders' cutoff.
+    server.state.db.set_agent_created_at(&eagle_id, now()).unwrap();
+    let young = server.mayor_cast(&eagle, &ann_opt).await;
+    assert_eq!(young["isError"], true, "{young}");
+    assert!(tool_err(&young).contains("7 days old"), "{}", tool_err(&young));
+    age(&eagle_id);
+
+    // A bot candidate can't vote for itself.
+    server.tool(&eagle, "mayor_race", json!({ "action": "stand" })).await;
+    let self_vote = server.mayor_cast(&eagle, &eagle_opt).await;
+    assert_eq!(self_vote["isError"], true, "{self_vote}");
+    assert!(tool_err(&self_vote).contains("can't vote for itself"), "{}", tool_err(&self_vote));
+    server.tool(&eagle, "mayor_race", json!({ "action": "withdraw" })).await;
+
+    // First counted bot ballot. PUT still names cast_vote.
+    let cast = server.mayor_cast(&eagle, &ann_opt).await;
+    assert!(cast["isError"].is_null(), "{cast}");
+    let race = cast["structuredContent"].clone();
+    assert_eq!(race["your_ballot"]["id"], ann.id, "{race}");
+    assert_eq!(race["voted_bots"], 1, "{race}");
+    let still_put = server
+        .put(
+            &eagle,
+            "/api/mayor/ballot",
+            json!({ "kind": "person", "id": ann.id, "hangout_id": square }),
+        )
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(still_put["error"].as_str().unwrap().contains("cast_vote"), "{still_put}");
+
+    // Ballots stay secret: no owner id on the ballot row. The owner mark has no candidate.
+    let ballot_cols = table_columns(&server, "mayor_bot_ballots");
+    assert!(!ballot_cols.iter().any(|c| c.contains("owner")), "{ballot_cols:?}");
+    assert!(ballot_cols.contains(&"agent_id".to_string()), "{ballot_cols:?}");
+    let mark_cols = table_columns(&server, "mayor_owner_bot_votes");
+    assert!(mark_cols.contains(&"owner_id".to_string()), "{mark_cols:?}");
+    assert!(!mark_cols.iter().any(|c| c.contains("candidate") || c == "agent_id"), "{mark_cols:?}");
+
+    // A second bot of the same owner is refused with a message, not dropped.
+    server.let_vote(&ann, &hawk_id, true).await;
+    age(&hawk_id);
+    let second = server.mayor_cast(&hawk, &ann_opt).await;
+    assert_eq!(second["isError"], true, "{second}");
+    assert!(
+        tool_err(&second).contains("your owner already has a bot ballot"),
+        "{}",
+        tool_err(&second)
+    );
+    let still = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_eq!(still["voted_bots"], 1, "second bot was not counted: {still}");
+
+    // The owner setting is locked at first cast: flipping it off does not change the ballot,
+    // and the same bot may still change its choice.
+    server.let_vote(&ann, &eagle_id, false).await;
+    let recast = server.mayor_cast(&eagle, &cy_opt).await;
+    assert!(recast["isError"].is_null(), "{recast}");
+    assert_eq!(recast["structuredContent"]["your_ballot"]["id"], cy.id);
+
+    // Another owner's bot gets its own ballot.
+    server.let_vote(&cy, &pip_id, true).await;
+    age(&pip_id);
+    let pip_vote = server.mayor_cast(&pip, &ann_opt).await;
+    assert!(pip_vote["isError"].is_null(), "{pip_vote}");
+    let open = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_eq!(open["voted_people"], 1, "{open}");
+    assert_eq!(open["voted_bots"], 2, "{open}");
+    assert_eq!(open["voted"], 3, "{open}");
+    assert!(!open.to_string().contains("\"people\":"), "no totals while open: {open}");
+
+    let used = server.tool(&eagle, "use_item", json!({ "item_id": box_id })).await;
+    assert!(text(&used["tools"]).contains("cast_vote"), "{used}");
+    assert_eq!(used["vote_id"], "mayor", "{used}");
+    assert!(used["options"].as_array().is_some_and(|opts| !opts.is_empty()), "{used}");
+
+    // Split tally once the week closes.
+    let closes = agenthangout::elections::next_close(now());
+    agenthangout::elections::settle_due(&server.state, closes + 1).unwrap();
+    let closed = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_eq!(closed["last_week"]["people_votes"], 1, "{closed}");
+    assert_eq!(closed["last_week"]["bot_votes"], 2, "{closed}");
+    assert_eq!(closed["last_week"]["votes"], 2, "Ann's person ballot and Pip's bot ballot");
+    let totals = closed["last_week"]["totals"].as_array().unwrap();
+    let for_ann = totals.iter().find(|row| row["name"] == "Ann").unwrap();
+    let for_cy = totals.iter().find(|row| row["name"] == "Cy").unwrap();
+    assert_eq!(for_ann["people"], 1, "{for_ann}");
+    assert_eq!(for_ann["bots"], 1, "{for_ann}");
+    assert_eq!(for_ann["votes"], 2, "{for_ann}");
+    assert_eq!(for_cy["people"], 0, "{for_cy}");
+    assert_eq!(for_cy["bots"], 1, "{for_cy}");
+    assert_eq!(for_cy["votes"], 1, "{for_cy}");
+    assert_eq!(closed["last_week"]["mayor"]["name"], "Ann", "{closed}");
 }
 
 // MY9 (morgkorg): with god mode on, someone stands whenever they like, with no 7-day wait, and
