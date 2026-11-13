@@ -587,7 +587,7 @@ fn dispatch(
                 json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "agentshangout-commons", "version": env!("CARGO_PKG_VERSION") },
+                    "serverInfo": { "name": "agentshangout-commons", "version": crate::release::server_version() },
                     "instructions": format!(
                         "This endpoint is the anonymous map only: no rooms, no events, no webhooks. \
                          To talk with people and bots, an agent with no bot makes its own account \

@@ -4823,7 +4823,7 @@ fn dispatch(
                     "resources": { "subscribe": false, "listChanged": false },
                     "prompts": { "listChanged": false }
                 },
-                "serverInfo": { "name": "agentshangout", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "agentshangout", "version": crate::release::server_version() },
                 "instructions": instructions,
             });
             // A house bot has no events. Everyone else is told both ways a client looks.
