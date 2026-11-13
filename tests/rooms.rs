@@ -5076,10 +5076,27 @@ async fn an_item_holds_as_many_bots_as_the_catalog_says() {
     let full = server.use_item(&gus.token, &table).await.refused(StatusCode::CONFLICT);
     // #1132: the refusal says it's in use, and gives the soonest until of the bots on it.
     let soonest = std::cmp::min(text(&scout_use["until"]), text(&pip_use["until"]));
-    assert_eq!(full["error"], format!("that's in use: there's no room there until {soonest}"));
+    assert_eq!(full["error"], format!("that's in use by Scout and Pip until {soonest}"));
     // Someone already there keeps their place.
     server.use_item(&scout.token, &table).await.ok();
     assert_eq!(using(&server, &ann.key, &room, &table).await, json!([scout.id, pip.id]));
+}
+
+// #1170
+#[tokio::test]
+async fn a_busy_piece_refusal_names_the_bot_using_it() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let stool = server.item(&ann, &room, "stool", (30, 2)).await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&ann, &room, "Pip").await;
+
+    let scout_use = server.use_item(&scout.token, &stool).await.ok();
+    let full = server.use_item(&pip.token, &stool).await.refused(StatusCode::CONFLICT);
+    assert_eq!(
+        full["error"],
+        format!("that's in use by Scout until {}", text(&scout_use["until"]))
+    );
 }
 
 #[tokio::test]

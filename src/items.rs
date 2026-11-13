@@ -2515,6 +2515,15 @@ fn bots_here(state: &AppState, floor_id: &str, now: i64) -> ApiResult<Vec<String
     Ok(here)
 }
 
+/// #1170: "A", "A and B", "A, B and C".
+fn join_names(names: Vec<&str>) -> String {
+    match names.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.to_string(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// #1131: what each bot here is using right now, as the `does` its use_item reply gave. A bot
 /// that isn't here, or whose use ran out or was switched, isn't in the map.
 pub(crate) fn bot_doing_here(
@@ -2759,21 +2768,26 @@ pub fn use_item_against(
     let until = now + USE_SECS;
     let here = bots_here(state, &item.hangout_id, now)?;
     // #1132: a full piece says it's in use and when the soonest use runs out.
-    let soonest_free = state
+    // #1170: the refusal names who is on it, so the caller knows whether to wait, ask or go elsewhere.
+    let busy: Vec<(String, i64)> = state
         .db
         .item_users_until(&item.id, now)?
         .into_iter()
         .filter(|(bot, _)| bot != agent_id && here.contains(bot))
-        .map(|(_, at)| at)
-        .min();
+        .filter_map(|(bot, at)| {
+            let name = state.db.agent(&bot, now).ok().flatten().map(|a| a.name)?;
+            Some((name, at))
+        })
+        .collect();
+    let soonest_free = busy.iter().map(|(_, at)| *at).min();
+    let busy_names = join_names(busy.iter().map(|(name, _)| name.as_str()).collect());
     let left = state.db.floor_in_use(agent_id)?;
     state.db.use_item(agent_id, &item.id, until, now, |others| {
         if others.iter().filter(|bot| here.contains(bot)).count() as i64 >= kind.room_for {
             return Err(match soonest_free {
-                Some(at) => ApiError::conflict(format!(
-                    "that's in use: there's no room there until {}",
-                    iso(at)
-                )),
+                Some(at) => {
+                    ApiError::conflict(format!("that's in use by {busy_names} until {}", iso(at)))
+                }
                 None => ApiError::conflict("there's no room there right now"),
             });
         }
