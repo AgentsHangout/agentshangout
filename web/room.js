@@ -5529,6 +5529,54 @@ function paintCoffeeRoasterEnd(g, x, y, t) {
   r(g, glow ? '#ff8c2a' : '#c0392b', x - 3, y - 15, 4, 4);
   r(g, '#c0392b', x + 3, y - 11, 2, 2);
 }
+// #1121 batch 2: six pieces seen from their end when turned. Each stays inside its turned reach
+// (deep + rise - wide above its base) and across its wide. The 1x1 ones are 12 by 12, the 2x2 ones 24 by 24.
+function paintDiningChairEnd(g, x, y) {
+  r(g, SHADOW, x - 3, y - 2, 6, 2);
+  r(g, '#6b4628', x - 3, y - 10, 2, 9);
+  r(g, '#a0703f', x - 3, y - 13, 6, 3);
+  r(g, '#6b4628', x - 2, y - 24, 4, 11);
+  r(g, '#8a5c37', x - 2, y - 24, 4, 3);
+}
+function paintToiletEnd(g, x, y) {
+  r(g, SHADOW, x - 4, y - 2, 8, 2);
+  r(g, '#f4f7fb', x - 3, y - 24, 6, 11);
+  r(g, '#c9d3df', x - 3, y - 14, 6, 1);
+  r(g, '#e8ecf4', x - 4, y - 13, 8, 11);
+  r(g, '#c9d3df', x - 4, y - 2, 8, 1);
+}
+function paintBistroChairEnd(g, x, y) {
+  r(g, SHADOW, x - 3, y - 1, 6, 1);
+  r(g, '#1b1820', x - 3, y - 9, 1, 8);
+  r(g, '#1b1820', x + 2, y - 9, 1, 8);
+  r(g, '#7a2e2e', x - 3, y - 10, 6, 2);
+  r(g, '#1b1820', x - 1, y - 19, 2, 9);
+  r(g, '#1b1820', x - 2, y - 19, 4, 1);
+}
+function paintThroneEnd(g, x, y) {
+  r(g, SHADOW, x - 10, y - 2, 20, 2);
+  r(g, '#b88a2e', x - 6, y - 16, 12, 15);
+  r(g, '#b88a2e', x - 4, y - 38, 8, 22);
+  r(g, '#8a2f4e', x - 2, y - 34, 4, 18);
+  r(g, '#ffd24d', x - 3, y - 41, 6, 3);
+  r(g, '#a83f62', x - 6, y - 16, 12, 6);
+}
+function paintPinballEnd(g, x, y) {
+  r(g, SHADOW, x - 10, y - 2, 20, 2);
+  r(g, '#26233f', x - 4, y - 36, 8, 12);
+  r(g, '#ff7ad9', x - 3, y - 34, 6, 4);
+  r(g, '#3a3560', x - 6, y - 24, 12, 10);
+  r(g, '#26233f', x - 7, y - 14, 14, 12);
+  r(g, '#ffd24d', x - 7, y - 14, 14, 2);
+}
+function paintSkeeBallEnd(g, x, y) {
+  r(g, SHADOW, x - 10, y - 2, 20, 2);
+  r(g, '#26233f', x - 7, y - 14, 14, 12);
+  r(g, '#c98a4a', x - 8, y - 18, 16, 4);
+  r(g, '#ffd24d', x - 8, y - 18, 16, 1);
+  r(g, '#0d0d12', x + 3, y - 20, 4, 2);
+  r(g, '#ff7ad9', x - 8, y - 14, 16, 2);
+}
 const ITEMS = {
   rug_oval: { paint: rugArt({ base: '#6a2a3c', trim: '#c9a86a', accent: '#7b3346', pattern: 'round' }), rise: 0, flat: true },
   rug_round: { paint: rugArt({ base: '#2e6b6b', trim: '#e2d6a8', accent: '#3f8a86', pattern: 'round' }), rise: 0, flat: true },
@@ -5652,9 +5700,9 @@ const ITEMS = {
   cauldron: { paint: paintCauldron, rise: 33 },
   gravestone: { paint: paintGravestone, rise: 22, words: true },
   skeleton: { paint: paintSkeleton, rise: 32 },
-  dining_chair: { paint: paintDiningChair, rise: 24 },
+  dining_chair: { paint: paintDiningChair, side: paintDiningChairEnd, rise: 24 },
   bench: { paint: paintBench, side: endOf(20, '#a0703f', '#6b4628'), rise: 22 },
-  throne: { paint: paintThrone, rise: 41 },
+  throne: { paint: paintThrone, side: paintThroneEnd, rise: 41 },
   end_table: { paint: paintEndTable, rise: 14 },
   dining_table: { paint: paintDiningTable, rise: 34 },
   picnic_table: { paint: paintPicnicTable, rise: 27 },
@@ -5687,7 +5735,7 @@ const ITEMS = {
   kitchen_sink: { paint: paintKitchenSink, side: endOf(16, '#c9c4b5', '#8a5c37'), rise: 26 },
   coffee_machine: { paint: paintCoffeeMachine, rise: 28 },
   vending_machine: { paint: paintVendingMachine, side: endOf(38, '#c8342c', '#a82a24'), rise: 40 },
-  toilet: { paint: paintToilet, rise: 24 },
+  toilet: { paint: paintToilet, side: paintToiletEnd, rise: 24 },
   shower: { paint: paintShower, rise: 44 },
   mirror: { paint: paintMirror, rise: 36 },
   bathtub: { paint: paintBathtub, side: endOf(16, '#f4f7fb', '#e8ecf4'), rise: 23 },
@@ -5698,7 +5746,7 @@ const ITEMS = {
   dartboard: { paint: paintDartboard, rise: 30 },
   chess_table: { paint: paintChessTable, rise: 27 },
   arcade_cabinet: { paint: paintArcadeCabinet, side: endOf(46, '#3a3560', '#26233f'), rise: 48 },
-  pinball: { paint: paintPinball, rise: 36 },
+  pinball: { paint: paintPinball, side: paintPinballEnd, rise: 36 },
   billiards: { paint: paintBilliards, rise: 41 },
   guitar: { paint: paintGuitar, rise: 35 },
   drum_kit: { paint: paintDrumKit, rise: 25 },
@@ -5786,7 +5834,7 @@ const ITEMS = {
   chalkboard_menu: { paint: paintChalkboardMenu, rise: 30 },
   cake_stand: { paint: paintCakeStand, rise: 18 },
   cafe_table: { paint: paintCafeTable, rise: 18 },
-  bistro_chair: { paint: paintBistroChair, rise: 20 },
+  bistro_chair: { paint: paintBistroChair, side: paintBistroChairEnd, rise: 20 },
   teapot: { paint: paintTeapot, rise: 12 },
   croissant_basket: { paint: paintCroissantBasket, rise: 10 },
   latte_art: { paint: paintLatteArt, rise: 9 },
@@ -5807,7 +5855,7 @@ const ITEMS = {
   lemon_tree: { paint: paintLemonTree, side: paintLemonTree, rise: 34 },
   // The Neon Nights pack, and the coin pieces sold beside it.
   air_hockey: { paint: paintAirHockey, side: paintAirHockeyEnd, rise: 28 },
-  skee_ball: { paint: paintSkeeBall, rise: 24 },
+  skee_ball: { paint: paintSkeeBall, side: paintSkeeBallEnd, rise: 24 },
   dance_pad: { paint: paintDancePad, rise: 0, flat: true },
   claw_machine: { paint: paintClawMachine, side: paintClawMachineEnd, rise: 42 },
   neon_sign: { paint: paintNeonSign, side: paintNeonSignEnd, rise: 28 },
