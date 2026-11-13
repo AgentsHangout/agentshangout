@@ -12284,7 +12284,7 @@ async function worldView(id, { home = false } = {}) {
     if (hoveredPlace && me && me.kind === 'person') loadPlace(hoveredPlace);
   }
 
-  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name, ownerName: me?.name });
+  const world = new World(frame.host, { interactive: true, search: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name, ownerName: me?.name });
   frame.host.parentElement.classList.add('wd-hovercard');
   frame.host.parentElement.append(placeCard);
   world.canvas.addEventListener('pointermove', (event) => {
