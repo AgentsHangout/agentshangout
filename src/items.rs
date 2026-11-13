@@ -1662,6 +1662,43 @@ fn check_facing(facing: i64) -> ApiResult<()> {
     Ok(())
 }
 
+/// The kinds a turn shows on: each has a painting for its end that isn't its front (web/room.js has
+/// `side` for them), so a turned one is drawn turned and its footprint swaps. Anything else stays at
+/// facing 0, and a turn of it is refused. tests/rooms.rs checks this list against web/room.js.
+#[rustfmt::skip]
+pub const TURNABLE: &[&str] = &[
+    "dining_chair", "bench", "armchair", "sofa", "love_seat", "throne", "bedroll", "bed",
+    "double_bed", "bunk_bed", "bookshelf", "cabinet", "chest", "dresser", "storage_shelf",
+    "wardrobe", "safe", "fireplace", "counter", "stove", "fridge", "kitchen_sink",
+    "vending_machine", "toilet", "bathtub", "radio", "computer", "television", "monitor",
+    "telescope", "server_rack", "dartboard", "arcade_cabinet", "pinball", "guitar", "piano",
+    "drum_kit", "jukebox", "harp", "flower_box", "hedge", "boulder", "aquarium", "rose_arch",
+    "framed_painting", "easel", "whiteboard", "board_station", "shared_notes_station",
+    "closing_clock", "calendar_stand", "corkboard", "research_board", "ballot_box",
+    "lific_board", "mayor_ballot_box", "job_board", "tool_chest", "anvil", "microscope",
+    "research_display", "fume_hood", "specimen_fridge", "periodic_table", "harvest_table",
+    "cornucopia", "cider_barrel", "hay_bale", "wheelbarrow", "sled", "string_lights",
+    "wood_stove", "log_pile", "tiki_bar", "hammock", "cafe_counter", "espresso_machine",
+    "pastry_case", "coffee_sacks", "bistro_chair", "teapot", "potting_bench", "trellis",
+    "seed_rack", "seedling_tray", "air_hockey", "skee_ball", "claw_machine", "neon_sign",
+    "prize_counter", "bean_bag_chair", "writing_desk", "card_catalog", "map_cabinet",
+    "book_cart", "wingback_chair", "planet_mobile", "star_chart", "astronaut", "lunar_rover",
+    "cocoa_cart", "planetarium", "igloo", "reindeer", "lifeguard_tower", "barista_cat",
+    "coffee_roaster", "fortune_machine", "photo_booth", "retro_cabinet", "owl_statue",
+    "typewriter", "grand_piano", "bookcase_ladder",
+];
+
+/// A turn (any facing but 0) is only for a kind in `TURNABLE`, which has an end to draw.
+fn check_turnable(kind: &Kind, facing: i64) -> ApiResult<()> {
+    if facing != 0 && !TURNABLE.contains(&kind.kind) {
+        return Err(ApiError::bad_request(format!(
+            "{} can't turn: it has no end to show",
+            kind.label
+        )));
+    }
+    Ok(())
+}
+
 /// I3: what has to stay clear on a floor that leaves this out, besides its table (I67).
 fn kept_clear(hidden: &[String]) -> impl Iterator<Item = &'static Cells> + '_ {
     let shown = FIXED_FURNITURE
@@ -2102,6 +2139,7 @@ fn store_item(
     kind: &Kind,
     (x, y, facing): (i64, i64, i64),
 ) -> ApiResult<ApiResult<String>> {
+    check_turnable(kind, facing)?;
     // I128: only someone with god mode on puts up a Lific board. A pack or template from anyone
     // else leaves it out, as it does a piece that doesn't fit.
     // MY7: the mayor's voting box is the server's, put up on the Town Square only.
@@ -2162,6 +2200,9 @@ fn change_item(
     let facing = body.facing.unwrap_or(item.facing);
     check_facing(facing)?;
     let kind = kind_of(&item.kind).ok_or_else(ApiError::not_found)?;
+    if facing != item.facing {
+        check_turnable(kind, facing)?;
+    }
     let spot = footprint(kind, x, y, facing);
     let table = table_of(state, &item.hangout_id)?.cells();
     let fits = |hidden: &[String], others: &[FloorItem]| {

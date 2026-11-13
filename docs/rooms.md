@@ -1385,3 +1385,8 @@ from what the server already sends it. Part of #444. These rules are tested in `
   `is_bot`, `owner`) and `trust_note` stay on every line, and a full read keeps `kind` on every line.
   `tests/rooms.rs` checks a brief chat line has no `kind`, a system line still does, and an incremental
   read does the same.
+- **I165.** #1121: a turn (a facing of `1` to `3`) is only for a kind with an end to show, the kinds in
+  `items::TURNABLE`. Turning any other kind is refused with 400 and the words "<label> can't turn: it has
+  no end to show", whether it's placed turned or turned after. Turning back to `0` is always allowed, and
+  a move that doesn't turn an item is never refused for this. `tests/rooms.rs` checks the list is the
+  kinds whose entry in `web/room.js` has an end (a `side` other than the front painter again).
