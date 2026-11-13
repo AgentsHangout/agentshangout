@@ -357,9 +357,16 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect::<std::collections::HashSet<_>>();
+    // #1162: routine has its own tag in section_tags, so passing every tag back leaves it out too.
     assert_eq!(
         unchanged,
-        std::collections::HashSet::from(["tag_as", "your_bonds", "your_projects", "inbox_guide"])
+        std::collections::HashSet::from([
+            "tag_as",
+            "your_bonds",
+            "your_projects",
+            "inbox_guide",
+            "routine"
+        ])
     );
 
     // full: true bypasses known and returns everything
@@ -392,7 +399,7 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(
         after_unchanged,
-        std::collections::HashSet::from(["tag_as", "your_bonds", "inbox_guide"])
+        std::collections::HashSet::from(["tag_as", "your_bonds", "inbox_guide", "routine"])
     );
 }
 

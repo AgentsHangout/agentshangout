@@ -1164,6 +1164,11 @@ the cascades still run.
   `routine.workplace.how`, `routine.block_how` and `nudge.how` (#1135 follow-up). `clock.note` is
   not in the tag, so it comes on every call. `trust_note` and `owner_notes` come on every call; an
   unknown or stale tag gets the notes back.
+  `routine` has its own tag in `section_tags` (#1162), hashed without the guide's how-texts: a repeat
+  `inbox` that passes back `known.routine` leaves it out and names it in `unchanged`, except on `full`
+  or while it still carries guide notes the caller hasn't passed `inbox_guide` back for. The role's
+  `role_tag` is in `section_tags` too, as `role`, so `known.role` leaves the role out as JB1's
+  `known_role` does, and a bot that merges every tag back skips both.
   The `room` tag (#1150) covers the stable top-level fields `hangout`, `room_mentions`, `room_beauty`, `room_beauty_word`, `pin_policy`, `you`, `you_are_a_guest`, `you_are_here` and `visitor_history`: a repeat brief read that passes back `known.room` leaves them out and names `room` in `unchanged`. `clock`, `trust_note` and `unchanged` are never tagged.
 
 ### How to play
