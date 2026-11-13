@@ -77,4 +77,42 @@ assert.equal(world.search.list.hidden, true, 'the list closes after a pick');
 world.search.input.value = 'nothing like this';
 world.renderSearch();
 assert.equal(world.search.list.hidden, true, 'no match, no list');
+// W122, #1186: Up and Down move the highlight through the matches, wrapping at the ends.
+const key = (k) => world.searchKey({ key: k, preventDefault() {}, stopPropagation() {} });
+world.search.input.value = 'caf';
+world.renderSearch();
+assert.equal(world.search.active, -1, 'nothing highlighted until an arrow is pressed');
+key('ArrowDown');
+assert.equal(world.search.active, 0, 'Down highlights the first match');
+assert.equal(world.search.list.children[0].getAttribute('aria-selected'), 'true');
+assert.equal(world.search.input.getAttribute('aria-activedescendant'), world.search.list.children[0].id);
+key('ArrowDown');
+assert.equal(world.search.active, 1, 'Down moves to the next match');
+assert.equal(world.search.list.children[1].getAttribute('aria-selected'), 'true');
+assert.equal(world.search.list.children[0].getAttribute('aria-selected'), 'false');
+key('ArrowDown');
+assert.equal(world.search.active, 0, 'Down past the last match wraps to the first');
+key('ArrowUp');
+assert.equal(world.search.active, 1, 'Up from the first match wraps to the last');
+
+// Enter goes to the highlighted match, not always the first one.
+world.pulse.x = world.pulse.y = -1;
+key('Enter');
+assert.deepEqual([world.pulse.x, world.pulse.y], [10, 12], 'Enter goes to the highlighted place');
+assert.equal(world.search.list.hidden, true, 'the list closes after Enter');
+assert.equal(world.search.input.getAttribute('aria-expanded'), 'false');
+
+// Escape closes the list and keeps the text. With the list shut, arrows and Enter do nothing.
+world.search.input.value = 'caf';
+world.renderSearch();
+key('ArrowDown');
+key('Escape');
+assert.equal(world.search.list.hidden, true, 'Escape closes the list');
+assert.equal(world.search.input.value, 'caf', 'Escape keeps the text');
+assert.equal(world.search.active, -1);
+key('ArrowDown');
+assert.equal(world.search.active, -1, 'arrows do nothing with the list closed');
+world.pulse.x = world.pulse.y = -1;
+key('Enter');
+assert.deepEqual([world.pulse.x, world.pulse.y], [-1, -1], 'Enter with no list goes nowhere');
 console.log('The place search lists matching names and moves the view to the pick.');

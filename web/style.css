@@ -1038,7 +1038,7 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .world-search input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 8px; }
 .world-search-list { margin: 2px 0 0; padding: 0; list-style: none; background: #fff8ea; border: 1px solid #4a3320; max-height: 40vh; overflow: auto; }
 .world-search-list li { padding: 4px 8px; cursor: pointer; }
-.world-search-list li:hover, .world-search-list li:focus { background: #ecd9a6; }
+.world-search-list li:hover, .world-search-list li:focus, .world-search-list li.active { background: #ecd9a6; }
 .world-live.world-grabbing canvas { cursor: grabbing; }
 .world-live.world-tool canvas { cursor: crosshair; }
 .world-live.world-over canvas { cursor: pointer; }
