@@ -126,21 +126,37 @@ assert.deepEqual(writes.at(-1), {}, 'the start is the empty document');
 await findButton('Undo').props.onclick();
 assert.equal(writes.length, 4, 'an empty undo sends nothing');
 
+// #1122 follow-up: with 2 floors, the 1-floor count is greyed out with a hint (the server refuses a
+// count below the rooms, E38), and a count above is still offered.
+await findTile('floors-2').props.onclick();
+assert.equal(floorsNow(), 2, 'two floors');
+assert.equal(findTile('floors-1').props.disabled, true, 'a count below the building is greyed out');
+assert.ok(text(findTile('floors-1')).includes('take a room out first'), 'the greyed count says why');
+assert.equal(findTile('floors-3').props.disabled, false, 'a count above the building is offered');
+await findTile('floors-3').props.onclick();
+assert.equal(floorsNow(), 3, 'three floors');
+await findButton('Undo').props.onclick();
+assert.equal(floorsNow(), 2, 'undo takes the third floor back');
+await findButton('Undo').props.onclick();
+assert.equal(floorsNow(), 1, 'undo takes the second floor back to the start');
+assert.equal(writes.length, 8, 'each step is one save');
+
 // A refused Undo: another tab changed the place after this one last saved, and the server refuses the
 // Undo. What's shown must then be the server's copy, not this tab's last accepted copy, so the next
 // change starts from what the server holds (the note another tab left stays).
 await findTile('floors-2').props.onclick();
 assert.equal(floorsNow(), 2, 'two floors before the refused undo');
+assert.equal(writes.length, 9, 'the two-floor step is saved');
 stored = { ...JSON.parse(JSON.stringify(stored)), note: 'left by another tab' };
 refuse = true;
 await findButton('Undo').props.onclick();
 refuse = false;
-assert.equal(writes.length, 5, 'the refused undo was not saved');
+assert.equal(writes.length, 9, 'the refused undo was not saved');
 // The refused step is not offered again, and the other tab's copy is not undone over: nothing is sent.
 await findButton('Undo').props.onclick();
-assert.equal(writes.length, 5, 'a refused undo step is not retried, and the history is cleared');
-await findTile('floors-1').props.onclick();
-assert.equal(writes.length, 6, 'the next change is saved');
+assert.equal(writes.length, 9, 'a refused undo step is not retried, and the history is cleared');
+await findTile('floors-3').props.onclick();
+assert.equal(writes.length, 10, 'the next change is saved');
 assert.equal(writes.at(-1).note, 'left by another tab', 'after a refusal the next change starts from the server copy');
 
 console.log('Outside floors 1-2-1 and Undo: pass (run through outsideBuilder with a stub server).');
