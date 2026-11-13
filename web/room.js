@@ -6028,6 +6028,21 @@ const USES = {
   wingback_chair: { spots: 1, pose: 'sit', on: true },
 };
 
+// #1121: whether a kind has an end to show when turned (facing 1 or 3). A `side` that is only the
+// front painter again (potted_tree) isn't an end. Matches items::TURNABLE, which tests/rooms.rs checks.
+export function turnsToEnd(kind) {
+  const entry = Object.hasOwn(ITEMS, kind) ? ITEMS[kind] : null;
+  return Boolean(entry?.side) && entry.side !== entry.paint;
+}
+
+// #1169: the facing a Turn goes to. A kind with an end turns a quarter (facing + 1). A kind with no
+// end goes 0 to 2 (the mirror), and from any other facing (1, 2 or 3, say a stored 1 or 3) to 0, since
+// the server refuses 1 and 3 for it. So every press is one the server takes.
+export function nextFacing(kind, facing) {
+  if (turnsToEnd(kind)) return (facing + 1) % 4;
+  return facing === 0 ? 2 : 0;
+}
+
 // Where an item stands, in the room's own pixels. `w` and `h` are cells as it's turned now, and
 // `x` and `y` are its back left corner, as the server has it.
 // I66: with no desk, whatever serves as one: a working bot sits in front of it. The camera uses the

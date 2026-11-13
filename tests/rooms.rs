@@ -370,13 +370,21 @@ async fn an_item_is_a_listed_kind_a_place_on_the_grid_and_a_facing() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let place = format!("/api/floors/{room}/items");
+    // A plant has no end to show, so it can't be placed turned to an end (1 or 3). Facing 2 is the
+    // left-right mirror, which any kind can take.
+    for end in [1, 3] {
+        server
+            .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": end }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
     let reply = server
-        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 3 }))
+        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 2 }))
         .await
         .ok();
     assert_eq!(
         (reply["kind"].clone(), reply["x"].clone(), reply["y"].clone(), reply["facing"].clone()),
-        (json!("plant"), json!(30), json!(2), json!(3))
+        (json!("plant"), json!(30), json!(2), json!(2))
     );
 
     for bad in [
@@ -488,7 +496,8 @@ async fn a_member_changes_what_they_placed_and_nothing_else() {
     let bos = server.item(&bo, &room, "plant", (30, 2)).await;
     let moved = server.change(&bo.key, &bos, json!({ "x": 31, "y": 3 })).await.ok();
     assert_eq!((moved["x"].clone(), moved["y"].clone()), (json!(31), json!(3)));
-    assert_eq!(server.change(&bo.key, &bos, json!({ "facing": 2 })).await.ok()["facing"], 2);
+    server.change(&bo.key, &bos, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
+    server.change(&bo.key, &bos, json!({ "facing": 2 })).await.ok();
 
     server.change(&cy.key, &bos, json!({ "x": 33 })).await.refused(StatusCode::FORBIDDEN);
     server.change(&cy.key, &bos, json!({ "facing": 1 })).await.refused(StatusCode::FORBIDDEN);
@@ -497,7 +506,7 @@ async fn a_member_changes_what_they_placed_and_nothing_else() {
 
     // Whoever runs the space can change anything.
     server.change(&ann.key, &bos, json!({ "x": 34 })).await.ok();
-    server.change(&ann.key, &bos, json!({ "facing": 1 })).await.ok();
+    server.change(&ann.key, &bos, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
     server.remove(&ann.key, &bos).await.ok();
 
     let again = server.item(&bo, &room, "plant", (30, 2)).await;
@@ -846,7 +855,7 @@ async fn hiding_and_showing_furniture_never_leaves_an_item_where_it_cant_be() {
     let scout = server.bot(&ann, &room, "Scout").await;
     assert_eq!(server.read_room(&scout.token, &room).await["items"].as_array().unwrap().len(), 2);
     server.change(&ann.key, &on_arcade, json!({ "x": 36 })).await.ok();
-    server.change(&ann.key, &on_bar, json!({ "facing": 1 })).await.ok();
+    server.change(&ann.key, &on_bar, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
     // And the same with something placed while it was all on show.
     server.item(&ann, &room, "plant", (37, 7)).await;
     server.put(&ann.key, &floor, json!({ "hidden": all })).await.ok();
@@ -963,12 +972,11 @@ async fn a_floor_still_loads_with_an_item_stored_where_it_cant_be() {
     );
     assert_eq!(server.read_room(&scout.token, &room).await["items"].as_array().unwrap().len(), 2);
 
-    // It can't be turned there on purpose (its turned cells run into the spots kept clear), and it
-    // can be put right.
+    // A plant can't be turned at all, so a turn is refused whatever is kept clear. It can be put right.
     server
         .change(&ann.key, "on-the-table", json!({ "facing": 1 }))
         .await
-        .refused(StatusCode::CONFLICT);
+        .refused(StatusCode::BAD_REQUEST);
     server.change(&ann.key, "on-the-table", json!({ "x": 30, "y": 5 })).await.ok();
     server.remove(&ann.key, "off-the-floor").await.ok();
 }
@@ -4235,7 +4243,7 @@ async fn a_template_keeps_the_table_and_the_size_and_its_items_are_ordinary_item
     let tables = snapshot["items"].as_array().unwrap().iter();
     let first = text(&tables.clone().find(|item| item["kind"] == "coffee_table").unwrap()["id"]);
     server.change(&ann.key, &first, json!({ "y": 0 })).await.ok();
-    server.change(&ann.key, &first, json!({ "facing": 1 })).await.ok();
+    server.change(&ann.key, &first, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
     server.remove(&ann.key, &first).await.ok();
 
     // What came with the room goes back as it would by hand. The couch and the desk have this
@@ -4624,24 +4632,23 @@ fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_
 }
 
 #[tokio::test]
-async fn any_kind_turns_and_turning_back_to_front_is_allowed() {
+async fn only_kinds_with_an_end_turn_and_turning_back_to_front_is_allowed() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let shelf = server.item(&ann, &room, "bookshelf", (30, 3)).await;
     let chair = server.item(&ann, &room, "stool", (10, 12)).await;
 
-    // The stool has no end of its own, so it's drawn turned as its front, and the turn is kept.
-    assert_eq!(server.change(&ann.key, &chair, json!({ "facing": 1 })).await.ok()["facing"], 1);
-    // Placing turned works the same way, for a kind with an end or without one.
-    let placed = server
+    // The stool has no end to show, so a turn of it is refused and it stays as it is.
+    server.change(&ann.key, &chair, json!({ "facing": 1 })).await.refused(StatusCode::BAD_REQUEST);
+    server
         .post(
             &ann.key,
             &format!("/api/floors/{room}/items"),
             json!({ "kind": "stool", "x": 12, "y": 12, "facing": 1 }),
         )
         .await
-        .ok();
-    assert_eq!(placed["facing"], 1);
+        .refused(StatusCode::BAD_REQUEST);
+    // A bookshelf has an end, so it turns both ways.
     assert_eq!(server.change(&ann.key, &shelf, json!({ "facing": 1 })).await.ok()["facing"], 1);
     assert_eq!(server.change(&ann.key, &shelf, json!({ "facing": 0 })).await.ok()["facing"], 0);
     assert_eq!(server.change(&ann.key, &chair, json!({ "facing": 0 })).await.ok()["facing"], 0);
@@ -5327,7 +5334,7 @@ async fn moving_an_item_keeps_who_is_using_it() {
     let stool = server.item(&ann, &room, "stool", (30, 2)).await;
     server.use_item(&scout.token, &stool).await.ok();
 
-    let moved = server.change(&ann.key, &stool, json!({ "x": 33, "facing": 1 })).await.ok();
+    let moved = server.change(&ann.key, &stool, json!({ "x": 33 })).await.ok();
     assert_eq!(moved["used_by"], json!([scout.id]));
     assert_eq!(using(&server, &ann.key, &room, &stool).await, json!([scout.id]));
 }
@@ -14208,4 +14215,67 @@ async fn read_room_brief_room_tag_leaves_out_stable_fields() {
         .clone();
     assert!(full.get("hangout").is_some() && full.get("you").is_some(), "{full}");
     assert!(full.get("visitor_history").is_some() && full.get("pin_policy").is_some());
+}
+
+// #1121: a turn is only for a kind with an end to show. The list in items::TURNABLE is the kinds
+// whose entry in web/room.js has a `side` that isn't its front painter again.
+#[test]
+fn turnable_kinds_are_exactly_the_ones_with_an_end_in_the_room_page() {
+    let page = include_str!("../web/room.js").replace("\r\n", "\n");
+    // The `{ ... }` of a kind's entry in the paint table: the one that has a `paint:` in it.
+    let entry = |kind: &str| -> String {
+        let head = format!("\n  {kind}: {{");
+        for (at, _) in page.match_indices(&head) {
+            let open = at + head.len() - 1;
+            let mut depth = 0;
+            for (i, c) in page[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let text = &page[open..open + i + 1];
+                            if text.contains("paint:") {
+                                return text.to_string();
+                            }
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        panic!("{kind} has no entry in web/room.js");
+    };
+    // The text after `key` (`paint: paintSofa, ...`), from its first word on.
+    let after = |text: &str, key: &str| -> String {
+        text.split(key).nth(1).unwrap_or("").trim_start().to_string()
+    };
+    let mut with_an_end = BTreeSet::new();
+    for kind in items::CATALOG.iter() {
+        let text = entry(kind.kind);
+        let paint: String = after(&text, "paint:")
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        // A `side` that is only the front painter again (the trees, leaf_pile, gourds) isn't an end.
+        // Anything else, a word or a drawing function, is one.
+        let side = if text.contains("side:") { after(&text, "side:") } else { String::new() };
+        let side_word: String =
+            side.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let front_again = side_word == paint
+            && !paint.is_empty()
+            && side[side_word.len()..].starts_with([',', '\n', '}', ' ']);
+        if !side.is_empty() && !front_again {
+            with_an_end.insert(kind.kind);
+        }
+    }
+    let turnable: BTreeSet<&str> = items::TURNABLE.iter().copied().collect();
+    let turns_but_no_end: Vec<&str> = turnable.difference(&with_an_end).copied().collect();
+    let no_turn_but_end: Vec<&str> = with_an_end.difference(&turnable).copied().collect();
+    assert!(
+        turns_but_no_end.is_empty() && no_turn_but_end.is_empty(),
+        "TURNABLE is out of step with web/room.js: listed without an end {turns_but_no_end:?}, \
+         has an end but not listed {no_turn_but_end:?}"
+    );
 }

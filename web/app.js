@@ -1,4 +1,4 @@
-import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
+import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, nextFacing, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { tutorial } from './tutorial.js';
@@ -3284,8 +3284,11 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   function turnHand() {
     // I67: a table faces the room whichever way it's put down.
     if (hand.table) return;
-    hand.facing = (hand.facing + 1) % 4;
-    [hand.w, hand.h] = [hand.h, hand.w];
+    // #1169: nextFacing takes a no-end kind to its mirror (2) from 0, and to 0 from any other facing.
+    const before = hand.facing;
+    hand.facing = nextFacing(hand.kind, before);
+    // The footprint swaps when the facing changes between an end (odd) and the front or mirror (even).
+    if (before % 2 !== hand.facing % 2) [hand.w, hand.h] = [hand.h, hand.w];
     moveHand(hand.x, hand.y);
   }
 
@@ -3324,7 +3327,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   async function turn(item) {
     try {
-      await api(`/api/items/${encodeURIComponent(item.id)}`, { method: 'PUT', body: { facing: (item.facing + 1) % 4 } });
+      await api(`/api/items/${encodeURIComponent(item.id)}`, { method: 'PUT', body: { facing: nextFacing(item.kind, item.facing) } });
       await reload();
       tell(`${labelOf(item.kind)} turned.`);
     } catch (error) {
