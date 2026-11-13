@@ -343,6 +343,20 @@ impl Server {
         self.call(token, "cast_vote", json!({ "vote_id": "mayor", "option": option })).await
     }
 
+    /// Tests only: when the open race was opened, for MY11's start gate. Lives here because
+    /// `#[cfg(test)]` on `Db` is invisible to integration tests (they compile the library without
+    /// it), and a `pub` method on `Db` would ship in production.
+    fn set_mayor_election_opened_at(&self, opened_at: i64) {
+        self.state
+            .db
+            .conn()
+            .execute(
+                "UPDATE mayor_elections SET opened_at = ? WHERE closed_at IS NULL",
+                [opened_at],
+            )
+            .unwrap();
+    }
+
     /// The town square, up and open: the god's switch is on from here.
     async fn town_square(&self, god: &Who) -> ((i64, i64), String) {
         self.switch(god, true).await;
@@ -841,11 +855,7 @@ async fn bots_vote_for_mayor_at_the_town_square_through_cast_vote() {
     assert_eq!(setting["on"], false, "{setting}");
 
     // The race open now stays people-only, even if the switch is on and the bot is old enough.
-    server
-        .state
-        .db
-        .set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM - 1)
-        .unwrap();
+    server.set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM - 1);
     server.let_vote(&ann, &eagle_id, true).await;
     age(&eagle_id);
     let before = server.tool(&eagle, "mayor_race", json!({ "action": "read" })).await;
@@ -865,11 +875,7 @@ async fn bots_vote_for_mayor_at_the_town_square_through_cast_vote() {
     assert_eq!(as_person["voted_bots"], 0, "{as_person}");
 
     // Bot ballots start with races opened at this week's close.
-    server
-        .state
-        .db
-        .set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM)
-        .unwrap();
+    server.set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM);
     let after_gate = server.tool(&eagle, "mayor_race", json!({ "action": "read" })).await;
     assert_eq!(after_gate["bot_ballots"], true, "{after_gate}");
     assert_eq!(after_gate["vote_id"], "mayor");
@@ -911,7 +917,8 @@ async fn bots_vote_for_mayor_at_the_town_square_through_cast_vote() {
         .refused(StatusCode::FORBIDDEN);
     assert!(still_put["error"].as_str().unwrap().contains("cast_vote"), "{still_put}");
 
-    // Ballots stay secret: no owner id on the ballot row. The owner mark has no candidate.
+    // Ballots stay secret: no owner id on the ballot table. The owner mark keeps the owner id
+    // and has no candidate.
     let ballot_cols = table_columns(&server, "mayor_bot_ballots");
     assert!(!ballot_cols.iter().any(|c| c.contains("owner")), "{ballot_cols:?}");
     assert!(ballot_cols.contains(&"agent_id".to_string()), "{ballot_cols:?}");
@@ -972,6 +979,66 @@ async fn bots_vote_for_mayor_at_the_town_square_through_cast_vote() {
     assert_eq!(for_cy["bots"], 1, "{for_cy}");
     assert_eq!(for_cy["votes"], 1, "{for_cy}");
     assert_eq!(closed["last_week"]["mayor"]["name"], "Ann", "{closed}");
+}
+
+// MY11 (#1164): deleting a bot that already cast a counted ballot does not free its owner's one
+// counted slot for that race. Freeing it would let an owner swap bots for a second counted ballot.
+#[tokio::test]
+async fn a_deleted_bots_mayor_ballot_still_uses_its_owners_slot() {
+    let (server, justin, _) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let (own_room, ann) = server.someone("Ann").await;
+    let (eagle_id, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    let (hawk_id, hawk) = server.bot(&ann, &own_room, "Hawk").await;
+    for bot in [&eagle_id, &hawk_id] {
+        server
+            .post(&ann.key, &format!("/api/floors/{square}/walk-in"), json!({ "agent_id": bot }))
+            .await
+            .ok();
+    }
+    server.state.db.backdate_person(&ann.id, now() - 8 * 86_400).unwrap();
+    server.post(&ann.key, &format!("/api/floors/{square}/walk-in"), json!({})).await;
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    server.set_mayor_election_opened_at(agenthangout::elections::BOT_BALLOTS_FROM);
+    for bot in [&eagle_id, &hawk_id] {
+        server.let_vote(&ann, bot, true).await;
+        server.state.db.set_agent_created_at(bot, now() - 8 * 86_400).unwrap();
+    }
+    let ann_opt = format!("person:{}", ann.id);
+    let cast = server.mayor_cast(&eagle, &ann_opt).await;
+    assert!(cast["isError"].is_null(), "{cast}");
+    assert_eq!(cast["structuredContent"]["voted_bots"], 1, "{cast}");
+
+    server
+        .post(&ann.key, &format!("/api/agents/{eagle_id}/delete"), json!({ "name": "Eagle" }))
+        .await
+        .ok();
+
+    let marks: i64 = server
+        .state
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM mayor_owner_bot_votes WHERE owner_id = ?",
+            [&ann.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(marks, 1, "deleting the bot must not clear the owner's per-race mark");
+
+    let second = server.mayor_cast(&hawk, &ann_opt).await;
+    assert_eq!(second["isError"], true, "{second}");
+    assert!(
+        tool_err(&second).contains("your owner already has a bot ballot"),
+        "{}",
+        tool_err(&second)
+    );
+    let still = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_ne!(still["voted_bots"], 2, "Hawk must not get a second counted ballot: {still}");
 }
 
 // MY9 (morgkorg): with god mode on, someone stands whenever they like, with no 7-day wait, and
