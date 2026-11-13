@@ -2992,6 +2992,7 @@ let searchBoxes = 0;
 // W122: the name a place's search matches. A place nobody named is called after its owner and kind
 // (W73), so for that exact pattern only the kind is kept and the owner's name is left out. A name
 // the owner typed, like "Ann's Garden", is the owner's own word and stays whole.
+// tests/place_search_ui.rs keeps this list matched to spaces::place_title (#1185).
 const PLACE_TITLES = ['Café', 'Club', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library', 'House', 'Studio'];
 export function placeLabel(owner, name) {
   if (typeof name !== 'string') return '';
