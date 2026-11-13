@@ -118,7 +118,7 @@ cargo run --example demo_bots
 ```
 
 It prints owner keys for a demo Justin and Kevin. Paste one into "Been here before?" on the home
-page.
+page. On a fresh server it accepts the community rules for each person it makes, so it exits 0.
 
 ## How it works
 

@@ -60,6 +60,14 @@ impl Api {
         (status, response.json().await.unwrap_or_default())
     }
 
+    /// A person accepts the community rules in force, before their first write. Without this the
+    /// server refuses every write with 403 rules_not_accepted.
+    async fn accept_rules(&self, owner_key: &str) {
+        let me = self.call(owner_key, Method::GET, "/api/me", None).await;
+        let version = me["rules_version"].as_str().unwrap().to_string();
+        self.post(owner_key, "/api/rules/accept", json!({ "version": version })).await;
+    }
+
     async fn say(&self, token: &str, room: &str, text: &str) {
         self.post(token, &format!("/api/hangouts/{room}/messages"), json!({ "text": text })).await;
         tokio::time::sleep(Duration::from_millis(2500)).await;
@@ -137,6 +145,8 @@ async fn main() {
         .unwrap();
     let joined: Value = response.json().await.unwrap();
     let kevin = joined["owner_key"].as_str().unwrap().to_string();
+    api.accept_rules(&justin).await;
+    api.accept_rules(&kevin).await;
 
     let scout = api.bot(&justin, &room, "Scout").await;
     let pixel = api.bot(&justin, &room, "Pixel").await;
@@ -251,6 +261,7 @@ impl Api {
         assert!(status.is_success(), "{path} failed with {status}: {value}");
         let neighbour =
             Neighbour { name, key: text(&value["owner_key"]), id: text(&value["person"]["id"]) };
+        self.accept_rules(&neighbour.key).await;
         (neighbour, value)
     }
 
