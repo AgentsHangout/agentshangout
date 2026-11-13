@@ -1557,10 +1557,14 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
         if (floors === usual.floors && now.x === usual.x && now.y === usual.y && now.w === usual.w && now.d === usual.d) delete doc.body;
         else doc.body = next;
       };
+      // E38: a building's floors are its space's rooms, so a count below the building's own is one the
+      // server refuses (409) while the rooms stand. Those are greyed out, with a hint, not offered.
+      const lower = floors < body.floors;
       members.push(catalogTile({
         name: `floors-${floors}`,
         picture: lazyPicture(`floors:${floors}`, `${placeKey()}|floors|${floors}|${keyOf(baseDoc())}`, PIC_W, PIC_H, () => snapshot(still(make), SIZES_IN_VIEW, PIC_W, PIC_H)),
         label: floors === 1 ? '1 floor' : `${floors} floors`,
+        why: lower ? 'take a room out first to go lower' : null,
         pressed: body.floors === floors,
         onclick: () => commit(edit(make), floors === 1 ? 'One floor.' : `${floors} floors.`),
       }));

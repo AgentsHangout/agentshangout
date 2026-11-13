@@ -142,7 +142,9 @@ what the map already shows.
   3 floors the add is refused with 409. Taking a room out takes a floor off the building. When its owner
   goes through its door (S34), the rooms and the building are made to match, as far as 3. No room is
   taken out by any of this, and a room with more than 3 floors (S35) keeps them while its building stays
-  at 3.
+  at 3. The builder greys out each floor count below the building's own, with a hint to take a room
+  out first, since the server would refuse it. A building from before E38 can have more rooms than
+  floors until its owner goes through the door (S34), so the server's refusal still says what's left.
 
 ### The yard
 
