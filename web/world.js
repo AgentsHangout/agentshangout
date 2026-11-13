@@ -2987,6 +2987,42 @@ function decodeLand(rows, n) {
   return out;
 }
 
+// W122: the name a place's search matches. A place nobody named is called after its owner and kind
+// (W73), so for that exact pattern only the kind is kept and the owner's name is left out. A name
+// the owner typed, like "Ann's Garden", is the owner's own word and stays whole.
+const PLACE_TITLES = ['Café', 'Club', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library', 'House', 'Studio'];
+export function placeLabel(owner, name) {
+  if (typeof name !== 'string') return '';
+  const text = name.slice(0, 60).trim();
+  if (typeof owner === 'string' && owner && text.startsWith(`${owner}'s `)) {
+    const rest = text.slice(owner.length + 3);
+    if (PLACE_TITLES.includes(rest)) return rest;
+  }
+  return text;
+}
+
+// W122: the places on the map whose name starts with or contains the words typed, with the
+// starts-with ones first. Only names are searched, never owners, bots or people. Empty when there's
+// no text, so an empty box shows nothing. `rows` is the view's `owners`: `[x, y, owner, name]`.
+export function placeMatches(rows, query, limit = 8) {
+  const q = String(query ?? '').trim().toLowerCase().slice(0, 60);
+  if (!q || !Array.isArray(rows)) return [];
+  const hits = [];
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const x = Math.round(Number(row[0]));
+    const y = Math.round(Number(row[1]));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const label = placeLabel(row[2], row[3]);
+    if (!label) continue;
+    const at = label.toLowerCase().indexOf(q);
+    if (at < 0) continue;
+    hits.push({ x, y, name: label, rank: at === 0 ? 0 : 1 });
+  }
+  hits.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name) || a.y - b.y || a.x - b.x);
+  return hits.slice(0, limit).map(({ x, y, name }) => ({ x, y, name }));
+}
+
 export function seenText(age) {
   if (!Number.isFinite(age) || age < 90) return 'seen just now';
   const minutes = Math.round(age / 60);
@@ -4495,6 +4531,7 @@ export class World {
     this.tip.hidden = true;
     this.tip.setAttribute('aria-hidden', 'true');
     container.append(this.skyCanvas, this.canvas, this.tip);
+    if (options.search) this.buildSearch(container);
 
     this.destroyed = false;
     this.ready = false;
@@ -4647,6 +4684,61 @@ export class World {
     }
     this.pulse = { x, y, t0: this.time };
     this.kick();
+  }
+
+  // W122: a search box over the map. Typing lists the places whose names match, and picking one
+  // moves the view to it and highlights it. Only built when a page asks for it with `search`.
+  buildSearch(container) {
+    const box = document.createElement('div');
+    box.className = 'world-search';
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.autocomplete = 'off';
+    input.placeholder = 'Find a place';
+    input.setAttribute('aria-label', 'Find a building or place on the map');
+    const list = document.createElement('ul');
+    list.className = 'world-search-list';
+    list.setAttribute('role', 'listbox');
+    list.hidden = true;
+    box.append(input, list);
+    container.append(box);
+    this.search = { box, input, list, hits: [] };
+    input.addEventListener('input', () => this.renderSearch());
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && this.search.hits[0]) this.goToPlace(this.search.hits[0]);
+      if (event.key === 'Escape') {
+        input.value = '';
+        this.renderSearch();
+      }
+    });
+  }
+
+  // W122: the places on the map that match a text, from the view's owners list.
+  searchPlaces(text) {
+    return placeMatches(this.ownerRows, text);
+  }
+
+  renderSearch() {
+    if (!this.search) return;
+    const { input, list } = this.search;
+    const hits = this.searchPlaces(input.value);
+    this.search.hits = hits;
+    list.textContent = '';
+    for (const hit of hits) {
+      const item = document.createElement('li');
+      item.setAttribute('role', 'option');
+      item.textContent = hit.name;
+      item.addEventListener('click', () => this.goToPlace(hit));
+      list.append(item);
+    }
+    list.hidden = hits.length === 0;
+  }
+
+  goToPlace(hit) {
+    this.focus(hit.x, hit.y, { zoom: 1.2 });
+    this.search.hits = [];
+    this.search.list.textContent = '';
+    this.search.list.hidden = true;
   }
 
   setZoom(zoom, options = {}) {

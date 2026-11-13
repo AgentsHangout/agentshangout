@@ -943,6 +943,13 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   per leg. If you have fewer moves than that it says so and sends nothing, so nobody is left halfway.
   The legs go one after another, and a refused leg stops the rest and shows its reason. See
   `tests/walk_far_ui.cjs`.
+- **W122.** The map has a place search: a box at the top left that lists the places on The Commons
+  whose names match what's typed, starts-with matches first, and picking one moves the view to it and
+  highlights it. It searches only the names in the view's `owners` list (W71, W73), never an owner,
+  a bot or a player, so a person's name finds nothing unless the owner typed it into a place's name. A place nobody named is called after its
+  owner and kind, and only the kind is searched. Every place is in `owners` for anyone looking, so
+  there's no hidden place for it to leave out: it lists exactly what the map already names. Nothing
+  is sent to the server, and it's client-only. See `tests/place_search_ui.mjs`.
 
 ## What this can't do
 
