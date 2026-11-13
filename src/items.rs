@@ -2732,9 +2732,9 @@ pub fn use_item_against(
         .item_users_until(&item.id, now)?
         .into_iter()
         .filter(|(bot, _)| bot != agent_id && here.contains(bot))
-        .map(|(bot, at)| {
-            let name = state.db.agent(&bot, now).ok().flatten().map(|a| a.name);
-            (name.unwrap_or(bot), at)
+        .filter_map(|(bot, at)| {
+            let name = state.db.agent(&bot, now).ok().flatten().map(|a| a.name)?;
+            Some((name, at))
         })
         .collect();
     let soonest_free = busy.iter().map(|(_, at)| *at).min();
