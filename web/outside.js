@@ -375,6 +375,9 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
         }
         fail(error.status === 401 ? new Error('You have been signed out, so this was not saved. Sign in again to go on.') : error);
         render();
+        // The server's word counts (E25): a refused change leaves this tab's last accepted copy behind
+        // what the server holds, so take the server's copy instead.
+        if (!flying && !timer) takeServerCopy(era, where);
         return false;
       }
     });
@@ -413,9 +416,28 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     if (!undo.length) return;
     const back = undo[undo.length - 1];
     undo = undo.slice(0, -1);
+    // A refused Undo is not put back: the server would refuse the same step on every click (#1122).
     const ok = await save(back, { remember: false });
     if (ok) tell('Undone.');
-    else undo = [...undo, back];
+  }
+
+  // After a refused change: show and keep the server's copy, not this tab's last accepted one.
+  async function takeServerCopy(era, where) {
+    try {
+      const got = await api(urlOf());
+      if (era !== session || flying || timer) return;
+      const fresh = clone(got.outside || {});
+      // The undo steps are whole documents from before this resync; if the server holds something else,
+      // an Undo would wipe what another tab added, so the history goes.
+      if (!same(accepted, fresh)) undo = [];
+      accepted = fresh;
+      shown = accepted;
+      changed(where.x, where.y, accepted);
+      repaint();
+      render();
+    } catch (error) {
+      if (era === session && error.status === 404) gone();
+    }
   }
 
   async function approvedPeople() {

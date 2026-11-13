@@ -57,9 +57,11 @@ const kind = 'house';
 let stored = {};
 const writes = [];
 const catalog = { groups: [{ group: 'size', label: 'Size' }], parts: [], templates: [], packs: [], yard: [], pets: { species: [] }, limits: { items: 40, pets: 6 } };
+let refuse = false;
 const api = async (url, opts = {}) => {
   if (url === '/api/outside') return catalog;
   if (opts.method === 'PUT') {
+    if (refuse) throw Object.assign(new Error('Another change got there first.'), { status: 409 });
     writes.push(opts.body);
     stored = JSON.parse(JSON.stringify(opts.body));
     return { outside: JSON.parse(JSON.stringify(stored)) };
@@ -123,5 +125,22 @@ assert.deepEqual(writes.at(-1), {}, 'the start is the empty document');
 // Nothing left to undo: a press does nothing and sends nothing.
 await findButton('Undo').props.onclick();
 assert.equal(writes.length, 4, 'an empty undo sends nothing');
+
+// A refused Undo: another tab changed the place after this one last saved, and the server refuses the
+// Undo. What's shown must then be the server's copy, not this tab's last accepted copy, so the next
+// change starts from what the server holds (the note another tab left stays).
+await findTile('floors-2').props.onclick();
+assert.equal(floorsNow(), 2, 'two floors before the refused undo');
+stored = { ...JSON.parse(JSON.stringify(stored)), note: 'left by another tab' };
+refuse = true;
+await findButton('Undo').props.onclick();
+refuse = false;
+assert.equal(writes.length, 5, 'the refused undo was not saved');
+// The refused step is not offered again, and the other tab's copy is not undone over: nothing is sent.
+await findButton('Undo').props.onclick();
+assert.equal(writes.length, 5, 'a refused undo step is not retried, and the history is cleared');
+await findTile('floors-1').props.onclick();
+assert.equal(writes.length, 6, 'the next change is saved');
+assert.equal(writes.at(-1).note, 'left by another tab', 'after a refusal the next change starts from the server copy');
 
 console.log('Outside floors 1-2-1 and Undo: pass (run through outsideBuilder with a stub server).');
