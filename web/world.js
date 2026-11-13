@@ -3000,16 +3000,18 @@ const PLACE_TITLES = ['Café', 'Club', 'Park', 'Lounge', 'Bar', 'Office', 'Works
 const OWNER_PART_CHARS = 51;
 export function placeLabel(owner, name) {
   if (typeof name !== 'string') return '';
-  const text = name.slice(0, 60).trim();
+  // Strip the owner from the whole name first, then cut: an auto name can run past 60 characters
+  // ("<51 chars>'s Workshop" is 62), and the owner part must survive the cut to be stripped.
+  const full = name.trim();
   if (typeof owner === 'string' && owner) {
     const cut = Array.from(owner).slice(0, OWNER_PART_CHARS).join('');
     for (const part of new Set([owner, cut])) {
-      if (!text.startsWith(`${part}'s `)) continue;
-      const rest = text.slice(part.length + 3);
+      if (!full.startsWith(`${part}'s `)) continue;
+      const rest = full.slice(part.length + 3);
       if (PLACE_TITLES.includes(rest)) return rest;
     }
   }
-  return text;
+  return full.slice(0, 60).trim();
 }
 
 // W122: the places on the map whose name starts with or contains the words typed, with the
