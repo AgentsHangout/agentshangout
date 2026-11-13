@@ -1391,3 +1391,6 @@ from what the server already sends it. Part of #444. These rules are tested in `
   the left-right mirror of the front, so any kind can take it. Turning back to `0` is always allowed, and
   a move that doesn't turn an item is never refused for this. `tests/rooms.rs` checks the list is the
   kinds whose entry in `web/room.js` has an end (a `side` other than the front painter again).
+  The Turn button follows the same rule (#1169, `nextFacing` in `web/room.js`): a kind with an end
+  turns a quarter at a time, and a kind with none goes `0` to `2`, and to `0` from any other facing, so
+  a press never sends `1` or `3` to it.
