@@ -1035,6 +1035,12 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .world-live canvas { touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; }
 /* W122: the place search over the map, top left, with its matches under the box. */
 .world-search { position: absolute; top: 8px; left: 8px; z-index: 2; width: min(240px, 60%); }
+/* The build tools float over the map's left edge, so the search starts to their right. A phone held
+   upright docks the tools along the bottom instead and leaves the corner free. */
+.wd-game .world-search { left: 184px; max-width: calc(100% - 196px); }
+@media (max-width: 759px) and (min-height: 541px) {
+  .wd-game .world-search { left: 8px; max-width: none; }
+}
 .world-search input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 8px; }
 .world-search-list { margin: 2px 0 0; padding: 0; list-style: none; background: #fff8ea; border: 1px solid #4a3320; max-height: 40vh; overflow: auto; }
 .world-search-list li { padding: 4px 8px; cursor: pointer; }

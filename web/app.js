@@ -12478,6 +12478,8 @@ async function worldView(id, { home = false } = {}) {
   // Escape closes the menu first, then the panel. It is heard before the map's own keys.
   const onKey = (event) => {
     if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+    // The map's place search takes its own Escape first: its open list closes, then the next Escape closes the panel.
+    if (event.target.closest?.('.world-search') && document.querySelector('.world-search-list:not([hidden])')) return;
     // What is in hand on the outside view goes back first.
     if (outsideBuild.takesEscape()) return;
     if (menu.isOpen) menu.close(true);
