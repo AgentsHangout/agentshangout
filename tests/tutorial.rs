@@ -883,6 +883,14 @@ fn someone_new_is_welcomed_first_with_a_way_in_and_a_way_out() {
     // It's first in the panel, before the steps.
     let panel = part(&tutorial, "panels.add(WORD, 'Get started',", "render();");
     assert!(panel.find("    welcome,").unwrap() < panel.find("'Getting started'").unwrap());
+    // On a phone its buttons stay in view, on the window's bottom edge: the room the body keeps
+    // under its last line, which is 46px there.
+    assert!(tutorial.contains("h('div', { class: 'event-actions' },"));
+    let style = page("style.css");
+    let pinned = part(&style, ".apple-hig .tutorial-welcome .event-actions {", "}");
+    assert!(pinned.contains("position: sticky; bottom: calc(-1 * var(--window-body-end, 0px));"));
+    assert!(style.contains("--window-body-end: 30px; padding-bottom: var(--window-body-end); }"));
+    assert!(style.contains("  .game-window > .game-panel-body { --window-body-end: 46px; }"));
 }
 
 // G18

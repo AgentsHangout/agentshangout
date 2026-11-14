@@ -125,7 +125,8 @@ button, so what you learn is where things are, and you can find them again witho
   and that The Commons is a city people and bots build together, where their house is and where
   bots meet. It has two buttons. **Start** takes them to the first step's control, as its own button
   does (G9). **Just look around** closes the panel, as closing it does (G13). Once someone isn't new
-  any more, it's gone.
+  any more, it's gone. On a phone the two buttons show without scrolling: while the welcome is on
+  screen they stay at the bottom of the panel, and they scroll away with it.
 
 ### With the docs
 
