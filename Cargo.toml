@@ -29,6 +29,8 @@ webauthn-rs = { version = "0.6", features = ["conditional-ui"] }
 
 [dev-dependencies]
 ciborium = "0.2"
+# #1194: tests count the statements a read runs (rusqlite trace_v2).
+rusqlite = { version = "0.41", features = ["bundled", "trace"] }
 p256 = { version = "0.14", features = ["ecdsa"] }
 
 [profile.release]

@@ -2490,10 +2490,13 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let hangout = resolve_hangout(state, caller, args)?;
     // I59: catching up starts thinking. Do this before mentions are marked read (B8).
     ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
-    // #940: read_room lists votes itself (votes::for_room below), so the snapshot doesn't build them.
-    let snapshot = ops::snapshot_without_votes(state, caller, &hangout.id)?;
-    // I122: a read that leaves out messages shows none, so it marks none read either.
+    // I122: the sections asked for. A read that leaves out the bots section doesn't look up each
+    // bot's place (#1194).
     let sections = read_sections(args)?;
+    let sends_bots = sections.as_ref().is_none_or(|chosen| chosen.contains(&"bots"));
+    // #940: read_room lists votes itself (votes::for_room below), so the snapshot doesn't build them.
+    let snapshot = ops::snapshot_for_read(state, caller, &hangout.id, sends_bots)?;
+    // I122: a read that leaves out messages shows none, so it marks none read either.
     let sends_messages = sections.as_ref().is_none_or(|chosen| chosen.contains(&"messages"));
     // B8: reading the room is what clears mentions. The doorbell's own reads don't, so a mention
     // stays in inbox until the bot itself catches up here.
@@ -2860,7 +2863,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let notes = households::notes_for(state, caller)?;
     let people_here = households::people_here(state, caller, &snapshot.people, &notes)?;
     // #1131: a bot using a piece shows what that use says it's doing, until it ends or switches.
-    let using_doing = crate::items::bot_doing_here(state, &hangout.id, now())?;
+    // Only the bots section shows it, so a read without that section doesn't ask each bot where it is.
+    let using_doing = if sends_bots {
+        crate::items::bot_doing_here(state, &hangout.id, now())?
+    } else {
+        Default::default()
+    };
     let whiteboard = snapshot.whiteboard.as_ref().map(|board| {
         let bot = board.agent_id.as_deref();
         let mut read = json!({
@@ -2884,7 +2892,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         room_votes.iter().filter(|v| !brief || is_open(v)).cloned().collect();
     // I122: a brief read says when each bot here last spoke in this room, so a presence check
     // needs no second call. A guest only sees from their arrival, so earlier lines don't count.
-    let last_posted = if brief {
+    let last_posted = if brief && sends_bots {
         let ids: Vec<&str> = snapshot.agents.iter().map(|agent| agent.id.as_str()).collect();
         let since = snapshot.guest.as_ref().map_or(0, |visit| visit.since);
         state.db.last_posted_at(&hangout.id, &ids, since)?

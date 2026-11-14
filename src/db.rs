@@ -10745,17 +10745,24 @@ impl Db {
         agent_ids: &[&str],
         since: i64,
     ) -> rusqlite::Result<HashMap<String, i64>> {
+        // #1194: one statement for all the bots, not one each. Each bot's newest chat line is
+        // still found by the same index.
         let conn = self.conn();
         let mut statement = conn.prepare_cached(
-            "SELECT created_at FROM messages INDEXED BY messages_by_room_bot
-             WHERE hangout_id = ? AND agent_id = ? AND kind = 'chat' ORDER BY id DESC LIMIT 1",
+            "SELECT ids.value, (SELECT created_at FROM messages INDEXED BY messages_by_room_bot
+                 WHERE hangout_id = ?1 AND agent_id = ids.value AND kind = 'chat'
+                 ORDER BY id DESC LIMIT 1)
+             FROM json_each(?2) AS ids",
         )?;
+        let ids = serde_json::to_string(agent_ids).unwrap_or_else(|_| "[]".to_string());
         let mut found = HashMap::new();
-        for agent_id in agent_ids {
-            let at: Option<i64> =
-                statement.query_row(params![hangout_id, agent_id], |row| row.get(0)).optional()?;
+        let rows = statement.query_map(params![hangout_id, ids], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
+        for row in rows {
+            let (agent_id, at) = row?;
             if let Some(at) = at.filter(|at| *at >= since) {
-                found.insert((*agent_id).to_string(), at);
+                found.insert(agent_id, at);
             }
         }
         Ok(found)
