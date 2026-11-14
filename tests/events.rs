@@ -2542,10 +2542,7 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
     });
     assert_eq!(claims.into_iter().flatten().collect::<Vec<_>>(), vec![ids[1]]);
     assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2, vec![ids[2]]);
-    assert_eq!(
-        server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(t)).unwrap(),
-        None
-    );
+    assert_eq!(server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(t)).unwrap(), None);
     let rings: i64 = conn
         .query_row("SELECT COUNT(*) FROM wake_rings WHERE agent_id=?", [&bot], |r| r.get(0))
         .unwrap();
