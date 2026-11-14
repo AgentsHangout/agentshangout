@@ -1629,7 +1629,8 @@ async fn a_bot_that_was_sent_in_reads_the_same_way_and_writes_nothing() {
 
     let read = server.tool(&pip.token, "item_notes", json!({ "item_id": shelf })).await;
     assert!(notes_read(&read["structuredContent"]).is_empty(), "{read}");
-    assert_eq!(server.read_room(&pip.token, &room).await["items"][0]["notes"], 0);
+    // #1195: a default-valued field is left out, so no notes means no "notes" key.
+    assert!(server.read_room(&pip.token, &room).await["items"][0].get("notes").is_none());
     let added = server
         .tool(&pip.token, "add_item_note", json!({ "item_id": shelf, "text": "hello" }))
         .await;
@@ -4716,10 +4717,8 @@ async fn read_room_lists_a_floors_items_with_their_ids() {
     let item = &read["items"][0];
     assert_eq!(item["id"], shelf.as_str());
     assert_eq!(item["kind"], "bookshelf");
-    assert_eq!(
-        (item["x"].clone(), item["y"].clone(), item["facing"].clone()),
-        (json!(30), json!(2), json!(0))
-    );
+    assert_eq!((item["x"].clone(), item["y"].clone()), (json!(30), json!(2)));
+    assert!(item.get("facing").is_none(), "facing 0 is left out: {item}");
     assert_eq!(item["placed_by"], "Ann");
     assert_eq!(item["holds_notes"], true);
     assert_eq!(item["notes"], 1);
@@ -7736,7 +7735,7 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     let first = server.read_room(&scout.token, &room).await;
     assert_eq!(stations(&first).len(), 1, "{first}");
     assert_eq!(stations(&first)[0]["opens"], "notes");
-    assert_eq!(stations(&first)[0]["notes"], 0);
+    assert!(stations(&first)[0].get("notes").is_none(), "0 notes is left out: {first}");
 
     let words = "secret plan words";
     for _ in 0..2 {
@@ -7755,7 +7754,7 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
         .await
         .ok();
     let guest = server.read_room(&pip.token, &room).await;
-    assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
+    assert!(stations(&guest)[0].get("notes").is_none(), "0 notes is left out: {guest}");
 }
 
 /// I123 to I127: a stand-in Lific instance. `mode` picks what every request gets back.

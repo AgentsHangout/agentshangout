@@ -3060,20 +3060,32 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
         shown
     } else {
+        // #1195: a field at its default is left out, and an absent field means its default
+        // (facing 0, no notes, holds no notes, nobody using it). id, kind and position stay.
+        let notes = if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes };
+        let users: Vec<&str> = item.used_by.iter().filter_map(bot_name).collect();
         let mut shown = json!({
             "id": item.id,
             "kind": item.kind,
             "x": item.x,
             "y": item.y,
-            "facing": item.facing,
             "placed_by": item.placed_by_name,
-            "holds_notes": item.holds_notes,
             "opens": item.opens,
-            // I101: the shared-notes station counts the room's notes this caller can read.
-            "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
             "does": item.does,
-            "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
         });
+        if item.facing != 0 {
+            shown["facing"] = json!(item.facing);
+        }
+        if item.holds_notes {
+            shown["holds_notes"] = json!(true);
+        }
+        // I101: the shared-notes station counts the room's notes this caller can read.
+        if notes != 0 {
+            shown["notes"] = json!(notes);
+        }
+        if !users.is_empty() {
+            shown["used_by"] = json!(users);
+        }
         // I106: when a closing clock sends visitors out, so there is time to say goodbye.
         // Ordinary items leave these out (#1069).
         if item.kind == "closing_clock" || item.closing.is_some() {
