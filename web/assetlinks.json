@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.agentshangout.android",
+      "sha256_cert_fingerprints": [
+        "11:C6:0A:34:08:F7:8F:FD:81:3A:E9:67:12:46:61:D1:14:2A:2E:02:91:E4:9B:8B:21:62:C6:AD:B5:85:2F:15"
+      ]
+    }
+  }
+]

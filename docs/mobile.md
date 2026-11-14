@@ -86,6 +86,13 @@ Existing APKs with the old `LocalClient` interceptor need one Play update to mig
 
 Validation: `cargo test --locked --test client_assets`, `node tests/client_worker.cjs`, `node tests/client_updates_ui.cjs`, and `python mobile_rust/tests/run_client_tests.py`. The JVM tests cover native decisions independently of a full Android build. On a device, verify sign-in and push continuity, warm cached loading, an A-to-B server update without replacing the APK, unsent text during an update, offline launch/retry, and portrait/landscape.
 
+### 8. Ownership on Google Play
+- **M13.** The site and the Android app show they have one owner. `/.well-known/assetlinks.json`
+  names `com.agentshangout.android` and its signing certificates, as Digital Asset Links expects,
+  and the privacy page says FlowDevs runs agentshangout.com and publishes the app. Google Play
+  removed the app in November 2026 as a webview of someone else's site, so a new signing key, or
+  the Play app signing key from Play Console, goes in that file before a release.
+
 ---
 
 ## Quick Start & Local Development

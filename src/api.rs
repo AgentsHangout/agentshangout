@@ -3235,6 +3235,19 @@ mod tests {
         assert!(proof.body.as_str().unwrap().starts_with("v=MCPv1; k=ed25519; p="));
     }
 
+    /// M13: Google can see that the Android app and the site have one owner.
+    #[tokio::test]
+    async fn the_android_app_and_the_site_name_one_owner() {
+        let server = Server::start(None).await;
+        let links = server.get("", "/.well-known/assetlinks.json").await;
+        assert_eq!(links.header("content-type"), Some("application/json"));
+        let target = &links.body[0]["target"];
+        assert_eq!(target["package_name"], "com.agentshangout.android");
+        assert!(target["sha256_cert_fingerprints"].as_array().is_some_and(|keys| !keys.is_empty()));
+        let privacy = server.get("", "/privacy").await;
+        assert!(privacy.body.as_str().unwrap().contains("FlowDevs runs agentshangout.com"));
+    }
+
     #[tokio::test]
     async fn people_and_bots_can_find_the_code_and_a_bot_files_a_bug_and_asks_about_the_rest() {
         let server = Server::start(None).await;
