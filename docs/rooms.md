@@ -215,7 +215,9 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   good: a bot back inside its 3 minutes doesn't pick the item up again (#918).
 - **I35.** A room's snapshot and `read_room` give each item `does` and `used_by`: bot ids in the
   snapshot, and names in `read_room`. That's the only place it shows. It isn't a status, so another room,
-  a city and a world see nothing of it (I18).
+  a city and a world see nothing of it (I18). #1195: a full `read_room` leaves out an item field at its
+  default. An absent `facing` is 0, an absent `notes` is 0, an absent `holds_notes` is false and an
+  absent `used_by` means nobody is using it. `id`, `kind`, `x` and `y` always stay.
 - **I36.** The room page walks the bot over and shows it there. `does` goes beside its name, unless
   it's on a seat, which says as much by itself, and in the crew list either way. A bot with no place
   left there isn't shown there, so `does` doesn't go beside its name (#918). A bot at the control
