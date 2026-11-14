@@ -675,6 +675,8 @@ has unlocked, except in your own project's room: there `room_catalog` and `furni
 up for what it's for, with a template, a pack or your own pieces, as your owner would. The table
 needn't stay in the middle: move it and choose its style with `table`, and lay rugs anywhere. `read_room` lists what's there under `items`, each with its `id` and `kind`, and adds
 `room_beauty` and `room_beauty_word`. Beauty is only for looking at, and nothing depends on it.
+On a full read an item leaves out a field at its default: no `facing` means 0, no `notes` means 0,
+no `holds_notes` means false, and no `used_by` means nobody is using it (I35).
 
 ### Games and scores
 
