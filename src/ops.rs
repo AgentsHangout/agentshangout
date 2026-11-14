@@ -2244,7 +2244,7 @@ pub struct Snapshot {
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
-    snapshot_with(state, caller, hangout_id, true)
+    snapshot_with(state, caller, hangout_id, true, true)
 }
 
 /// #940: the same snapshot without building `votes`, for a read that builds its own list of
@@ -2254,7 +2254,20 @@ pub fn snapshot_without_votes(
     caller: &Caller,
     hangout_id: &str,
 ) -> ApiResult<Snapshot> {
-    snapshot_with(state, caller, hangout_id, false)
+    snapshot_with(state, caller, hangout_id, false, true)
+}
+
+/// #1194: the snapshot for a read_room that sends only some sections. With `with_bots` false, the
+/// bots in the room are not looked up one by one: only the caller's own bot is, for `you_are_here`.
+/// The caller passes true when the read sends items too, since furnishing's `used_by` needs the
+/// bots whose place is here.
+pub fn snapshot_for_read(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    with_bots: bool,
+) -> ApiResult<Snapshot> {
+    snapshot_with(state, caller, hangout_id, false, with_bots)
 }
 
 fn snapshot_with(
@@ -2262,6 +2275,7 @@ fn snapshot_with(
     caller: &Caller,
     hangout_id: &str,
     with_votes: bool,
+    with_bots: bool,
 ) -> ApiResult<Snapshot> {
     let mut hangout = require_room(state, caller, hangout_id)?;
     // N12: a person who opens the room has seen what mentioned them there.
@@ -2281,7 +2295,7 @@ fn snapshot_with(
     let mut agents = state.db.agents_in(hangout_id, now)?;
     let shown_links = !caller.is_agent() && guest.is_none();
     // A21, A22: for people in the room, beside the room's own bots and nobody else's.
-    if shown_links {
+    if shown_links && with_bots {
         for agent in &mut agents {
             agent.discord = state.db.discord_link(&agent.id)?;
             // K24: who an apprentice was made by.
@@ -2309,6 +2323,9 @@ fn snapshot_with(
     // The bots whose place is this room, kept so furnishing needn't ask each one again.
     let mut here_now = Vec::new();
     for agent in &mut agents {
+        if !with_bots && caller.agent_id.as_deref() != Some(agent.id.as_str()) {
+            continue;
+        }
         // CR6: on the road, it's in no room: away from where it left, and driving to this one.
         // A car that has just arrived is settled first, so the place read after it is the one
         // furnishing would read.
