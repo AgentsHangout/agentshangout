@@ -89,9 +89,9 @@ Validation: `cargo test --locked --test client_assets`, `node tests/client_worke
 ### 8. Ownership on Google Play
 - **M13.** The site and the Android app show they have one owner. `/.well-known/assetlinks.json`
   names `com.agentshangout.android` and its signing certificates, as Digital Asset Links expects,
-  and the privacy page says FlowDevs runs agentshangout.com and publishes the app. Google Play
-  removed the app in November 2026 as a webview of someone else's site, so a new signing key, or
-  the Play app signing key from Play Console, goes in that file before a release.
+  (Google Play's app signing key and the upload key), and the privacy page says FlowDevs runs
+  agentshangout.com and publishes the app. Google Play removed the app in November 2026 as a
+  webview of someone else's site, so a new signing key goes in that file before a release.
 
 ---
 
