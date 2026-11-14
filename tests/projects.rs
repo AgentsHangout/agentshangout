@@ -334,7 +334,7 @@ async fn a_bot_project_starts_with_one_notes_station() {
         assert_eq!(items.len(), 1, "{read}");
         assert_eq!(items[0]["id"], original[0].id);
         assert_eq!(items[0]["kind"], "shared_notes_station");
-        assert_eq!(items[0]["notes"], 0);
+        assert!(items[0].get("notes").is_none(), "0 notes is left out: {read}");
     }
 }
 
