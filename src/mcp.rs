@@ -3044,52 +3044,81 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             || item.sign
     };
     let decor = snapshot.furnishing.items.iter().filter(|item| !usable(item)).count();
-    let items_val = json!(snapshot.furnishing.items.iter().filter(|item| !brief || usable(item)).map(|item| with_plans(item, if brief {
-        let mut shown = json!({
-            "id": item.id,
-            "kind": item.kind,
-            "x": item.x,
-            "y": item.y,
-            "holds_notes": item.holds_notes,
-        });
-        if let Some(opens) = item.opens {
-            shown["opens"] = json!(opens);
-        }
-        if let Some(does) = item.does {
-            shown["does"] = json!(does);
-        }
-        shown
-    } else {
-        let mut shown = json!({
-            "id": item.id,
-            "kind": item.kind,
-            "x": item.x,
-            "y": item.y,
-            "facing": item.facing,
-            "placed_by": item.placed_by_name,
-            "holds_notes": item.holds_notes,
-            "opens": item.opens,
-            // I101: the shared-notes station counts the room's notes this caller can read.
-            "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
-            "does": item.does,
-            "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
-        });
-        // I106: when a closing clock sends visitors out, so there is time to say goodbye.
-        // Ordinary items leave these out (#1069).
-        if item.kind == "closing_clock" || item.closing.is_some() {
-            shown["closes_at"] = json!(item.closing.as_ref().map(|clock| iso(clock.closes_at)));
-            shown["seconds_left"] = json!(item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)));
-            shown["sends_out"] = json!(item.closing.as_ref().map(|clock| clock.sends_out));
-            shown["you_are_listed"] = json!(item.closing.as_ref().map(|clock| clock.listed));
-            shown["sends_out_bots"] = json!(item.closing.as_ref().and_then(|clock| clock.bots.as_ref()));
-        }
-        // I111: the ballot box counts the room's open votes this caller can see.
-        // Other items leave this out (#1069).
-        if item.kind == "ballot_box" {
-            shown["votes"] = json!(open_votes);
-        }
-        shown
-    })).collect::<Vec<_>>());
+    let items_val = json!(snapshot
+        .furnishing
+        .items
+        .iter()
+        .filter(|item| !brief || usable(item))
+        .map(|item| with_plans(
+            item,
+            if brief {
+                let mut shown = json!({
+                    "id": item.id,
+                    "kind": item.kind,
+                    "x": item.x,
+                    "y": item.y,
+                    "holds_notes": item.holds_notes,
+                });
+                if let Some(opens) = item.opens {
+                    shown["opens"] = json!(opens);
+                }
+                if let Some(does) = item.does {
+                    shown["does"] = json!(does);
+                }
+                shown
+            } else {
+                // #1195: a field at its default is left out, and an absent field means its default
+                // (facing 0, no notes, holds no notes, nobody using it). id, kind and position stay.
+                let notes = if item.kind == "shared_notes_station" {
+                    snapshot.notes.len() as i64
+                } else {
+                    item.notes
+                };
+                let users: Vec<&str> = item.used_by.iter().filter_map(bot_name).collect();
+                let mut shown = json!({
+                    "id": item.id,
+                    "kind": item.kind,
+                    "x": item.x,
+                    "y": item.y,
+                    "placed_by": item.placed_by_name,
+                    "opens": item.opens,
+                    "does": item.does,
+                });
+                if item.facing != 0 {
+                    shown["facing"] = json!(item.facing);
+                }
+                if item.holds_notes {
+                    shown["holds_notes"] = json!(true);
+                }
+                // I101: the shared-notes station counts the room's notes this caller can read.
+                if notes != 0 {
+                    shown["notes"] = json!(notes);
+                }
+                if !users.is_empty() {
+                    shown["used_by"] = json!(users);
+                }
+                // I106: when a closing clock sends visitors out, so there is time to say goodbye.
+                // Ordinary items leave these out (#1069).
+                if item.kind == "closing_clock" || item.closing.is_some() {
+                    shown["closes_at"] =
+                        json!(item.closing.as_ref().map(|clock| iso(clock.closes_at)));
+                    shown["seconds_left"] =
+                        json!(item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)));
+                    shown["sends_out"] = json!(item.closing.as_ref().map(|clock| clock.sends_out));
+                    shown["you_are_listed"] =
+                        json!(item.closing.as_ref().map(|clock| clock.listed));
+                    shown["sends_out_bots"] =
+                        json!(item.closing.as_ref().and_then(|clock| clock.bots.as_ref()));
+                }
+                // I111: the ballot box counts the room's open votes this caller can see.
+                // Other items leave this out (#1069).
+                if item.kind == "ballot_box" {
+                    shown["votes"] = json!(open_votes);
+                }
+                shown
+            }
+        ))
+        .collect::<Vec<_>>());
 
     let section_tag = |value: &Value| -> String {
         crate::auth::hash_secret(&value.to_string())[..16].to_string()
