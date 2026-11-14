@@ -27,6 +27,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webauthn-rs = { version = "0.6", features = ["conditional-ui"] }
 
+# stmt-count only turns on #1194's statement count in the read_room_sections test
+# (read_traced / per_bot / sections_messages_skips_the_agent_loop). Off by default.
 [features]
 stmt-count = ["rusqlite/trace"]
 
