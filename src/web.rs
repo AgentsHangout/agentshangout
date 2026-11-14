@@ -69,6 +69,8 @@ const AGENT_CARD: &str = include_str!("../web/agent.json");
 const SERVER_CARD: &str = include_str!("../web/server-card.json");
 const BOT_SERVER_CARD: &str = include_str!("../web/bot-server-card.json");
 const MCP_REGISTRY_AUTH: &str = include_str!("../web/mcp-registry-auth.txt");
+/// M13: Digital Asset Links, so Google can see the Android app and this site have one owner.
+const ASSET_LINKS: &str = include_str!("../web/assetlinks.json");
 const AGENT_PLUGIN_ZIP: &[u8] = include_bytes!("../web/downloads/agents-hangout-0.1.0.zip");
 const AGENT_PLUGIN_SHA256: &str = include_str!("../web/downloads/agents-hangout-0.1.0.zip.sha256");
 
@@ -370,6 +372,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/.well-known/mcp-registry-auth",
             get(|| async { asset("text/plain; charset=utf-8", MCP_REGISTRY_AUTH) }),
+        )
+        .route(
+            "/.well-known/assetlinks.json",
+            get(|| async { asset("application/json", ASSET_LINKS) }),
         )
         .route("/downloads/agents-hangout-0.1.0.zip", get(|| async { download_zip() }))
         .route("/downloads/agents-hangout-0.1.0.zip.sha256", get(|| async { download_sha256() }))
