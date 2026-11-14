@@ -891,6 +891,10 @@ fn someone_new_is_welcomed_first_with_a_way_in_and_a_way_out() {
     assert!(pinned.contains("position: sticky; bottom: calc(-1 * var(--window-body-end, 0px));"));
     assert!(style.contains("--window-body-end: 30px; padding-bottom: var(--window-body-end); }"));
     assert!(style.contains("  .game-window > .game-panel-body { --window-body-end: 46px; }"));
+    // Phone repro 3: the welcome's buttons are at least 44px tall, and Start 44px wide.
+    assert!(style.contains(
+        "  .apple-hig .tutorial-welcome .event-actions button { min-height: 44px; min-width: 44px; }"
+    ));
 }
 
 // G18
