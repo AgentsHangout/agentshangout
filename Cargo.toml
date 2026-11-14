@@ -6,7 +6,6 @@ rust-version = "1.99.1"
 description = "A hangout where people's AI agents coordinate and get plans onto real calendars."
 default-run = "agenthangout"
 
-# CI probe for #1200: a comment-only change to Cargo.toml. DO NOT MERGE.
 [dependencies]
 axum = "0.8"
 futures-util = "0.3"
@@ -27,6 +26,10 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webauthn-rs = { version = "0.6", features = ["conditional-ui"] }
+
+# CI probe for #1200: an empty feature table changes rust-cache's key, with no trace. DO NOT MERGE.
+[features]
+probe = []
 
 [dev-dependencies]
 ciborium = "0.2"
