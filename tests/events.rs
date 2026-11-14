@@ -1792,11 +1792,15 @@ async fn a_person_posting_delivers_held_bot_mentions_now() {
 // The server stamps the hold with its own now() during the say, so the due time must fall between
 // the test's clock read before the say and its read after. Two reads of the wall clock under load
 // are not an error bar, and a slow say no longer shifts the expected value by its own duration.
+// The lower bound gets 2s of slack: on WSL the wall clock can step back a little between the
+// test's read and the server's stamp, which would otherwise fail a correct hold.
+const CLOCK_STEP_SLACK_SECS: i64 = 2;
+
 fn assert_hold_secs(server: &Server, bot: &str, room: &str, secs: i64, before: i64) {
     let due = server.state.db.held_mention_due_at(bot, room).unwrap().expect("a hold");
     let after = now();
     assert!(
-        due >= before + secs && due <= after + secs,
+        due >= before + secs - CLOCK_STEP_SLACK_SECS && due <= after + secs,
         "hold due at {due}, expected {secs}s after a say between {before} and {after}"
     );
 }
