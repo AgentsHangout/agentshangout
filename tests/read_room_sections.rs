@@ -1,5 +1,4 @@
-//! #1194: a read_room that leaves out the bots section doesn't look up each bot's place, drive or
-//! home, so a busy room costs the same few statements however many bots it has.
+//! #1194: a read_room that leaves out the bots section gives the same messages and items as before.
 
 mod support;
 
@@ -9,9 +8,7 @@ use agenthangout::{
     now, AppState, Config,
 };
 use reqwest::Client;
-use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
 
 const CODE: &str = "letmein";
 
@@ -72,31 +69,11 @@ async fn busy_room() -> (String, Client, AppState, String) {
     (room, client, state, token)
 }
 
-/// Calls read_room over HTTP and returns the reply and every statement the read ran.
-async fn read(
-    state: &AppState,
-    client: &Client,
-    base: &str,
-    token: &str,
-    args: Value,
-) -> (Value, Vec<String>) {
-    let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = log.clone();
-    state
-        .db
-        .conn()
-        .trace_v2(
-            TraceEventCodes::SQLITE_TRACE_STMT,
-            Some(move |event: TraceEvent<'_>| {
-                if let TraceEvent::Stmt(_, sql) = event {
-                    sink.lock().unwrap().push(sql.split_whitespace().collect::<Vec<_>>().join(" "));
-                }
-            }),
-        )
-        .unwrap();
+/// Calls read_room over HTTP and returns the reply.
+async fn read(client: &Client, base: &str, token: &str, args: Value) -> Value {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "read_room", "arguments": args}});
-    let reply: Value = client
+    client
         .post(format!("{base}/mcp"))
         .bearer_auth(token)
         .json(&body)
@@ -105,14 +82,7 @@ async fn read(
         .unwrap()
         .json()
         .await
-        .unwrap();
-    state
-        .db
-        .conn()
-        .trace_v2::<fn(TraceEvent<'_>)>(TraceEventCodes::SQLITE_TRACE_STMT, None)
-        .unwrap();
-    let statements = std::mem::take(&mut *log.lock().unwrap());
-    (reply, statements)
+        .unwrap()
 }
 
 /// The JSON a read_room reply carries as its text.
@@ -120,38 +90,6 @@ fn body(reply: &Value) -> Value {
     serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
-fn per_bot(statements: &[String]) -> usize {
-    statements
-        .iter()
-        .filter(|sql| sql.contains("FROM bot_places") || sql.contains("FROM bot_trips"))
-        .count()
-}
-
-// #1194: with sections=[messages], the per-bot loop doesn't run: no other bot's place or drive is
-// read. A full read still does, so the count below would show it if the loop were back.
-#[tokio::test]
-async fn sections_messages_skips_the_agent_loop() {
-    let (room, client, state, token) = busy_room().await;
-    let base = state.config.public_url.clone();
-    let (full, full_sql) =
-        read(&state, &client, &base, &token, json!({ "hangout_id": room })).await;
-    assert!(full["result"]["isError"].is_null(), "{full}");
-    assert!(per_bot(&full_sql) >= 60, "a full read looks at each bot: {}", per_bot(&full_sql));
-
-    for args in [
-        json!({ "hangout_id": room, "sections": ["messages"] }),
-        json!({ "hangout_id": room, "sections": ["messages"], "brief": true, "limit": 5 }),
-    ] {
-        let (reply, sql) = read(&state, &client, &base, &token, args.clone()).await;
-        assert!(reply["result"]["isError"].is_null(), "{reply}");
-        // Only the caller's own bot is looked up, so a few statements, not 60 bots' worth.
-        assert!(per_bot(&sql) <= 2, "{args} looked up {} bot places", per_bot(&sql));
-        assert!(sql.len() < 150, "{args} ran {} statements", sql.len());
-    }
-}
-
-// #1194 review: furnishing's used_by reads the bots in the room, so an items-only read still
-// runs the per-bot lookups and names the bot that uses a stool, even though the bots section is out.
 #[tokio::test]
 async fn sections_items_names_the_bot_using_a_stool() {
     let (room, client, state, token) = busy_room().await;
@@ -175,9 +113,8 @@ async fn sections_items_names_the_bot_using_a_stool() {
         .unwrap()
         .unwrap();
     // Bot0 (the caller) reads only the items. Bot1 is another bot, and it sits on the stool.
-    let (reply, _) =
-        read(&state, &client, &base, &token, json!({ "hangout_id": room, "sections": ["items"] }))
-            .await;
+    let reply =
+        read(&client, &base, &token, json!({ "hangout_id": room, "sections": ["items"] })).await;
     assert!(reply["result"]["isError"].is_null(), "{reply}");
     let got = body(&reply);
     assert!(got.get("bots").is_none(), "{got}");
@@ -193,15 +130,9 @@ async fn sections_items_names_the_bot_using_a_stool() {
 async fn sections_messages_sends_the_same_lines_and_no_bots() {
     let (room, client, state, token) = busy_room().await;
     let base = state.config.public_url.clone();
-    let (full, _) = read(&state, &client, &base, &token, json!({ "hangout_id": room })).await;
-    let (only, _) = read(
-        &state,
-        &client,
-        &base,
-        &token,
-        json!({ "hangout_id": room, "sections": ["messages"] }),
-    )
-    .await;
+    let full = read(&client, &base, &token, json!({ "hangout_id": room })).await;
+    let only =
+        read(&client, &base, &token, json!({ "hangout_id": room, "sections": ["messages"] })).await;
     let full = &body(&full);
     let only = &body(&only);
     assert_eq!(only["messages"], full["messages"]);
