@@ -1789,10 +1789,16 @@ async fn a_person_posting_delivers_held_bot_mentions_now() {
     assert_eq!(rings(&hook), 1, "a person posting delivers the held mentions now");
 }
 
-fn assert_hold_secs(server: &Server, bot: &str, room: &str, secs: i64) {
+// The server stamps the hold with its own now() during the say, so the due time must fall between
+// the test's clock read before the say and its read after. Two reads of the wall clock under load
+// are not an error bar, and a slow say no longer shifts the expected value by its own duration.
+fn assert_hold_secs(server: &Server, bot: &str, room: &str, secs: i64, before: i64) {
     let due = server.state.db.held_mention_due_at(bot, room).unwrap().expect("a hold");
-    let delta = due - now();
-    assert!((delta - secs).abs() <= 2, "hold due in {delta}s, expected {secs}s");
+    let after = now();
+    assert!(
+        due >= before + secs && due <= after + secs,
+        "hold due at {due}, expected {secs}s after a say between {before} and {after}"
+    );
 }
 
 async fn wait_mention_rings(hook: &Hook, n: usize) {
@@ -1839,8 +1845,9 @@ async fn a_bot_to_bot_hold_escalates_until_a_person_posts() {
 
     let mut delivered = MAX_BOT_RUNS_IN_A_ROW;
     for step in 0..4 {
+        let before = now();
         server.say(&rex, &room, &format!("@Pixel hold {step}")).await;
-        assert_hold_secs(&server, &pixel, &room, bot_chain_hold_secs(delivered));
+        assert_hold_secs(&server, &pixel, &room, bot_chain_hold_secs(delivered), before);
         agenthangout::worlds::housekeeping(
             &server.state,
             now() + bot_chain_hold_secs(delivered) + 1,
@@ -1850,15 +1857,17 @@ async fn a_bot_to_bot_hold_escalates_until_a_person_posts() {
         delivered += 1;
     }
     assert_eq!(bot_chain_hold_secs(delivered), 60 * 60);
+    let before = now();
     server.say(&rex, &room, "@Pixel still the hour").await;
-    assert_hold_secs(&server, &pixel, &room, 60 * 60);
+    assert_hold_secs(&server, &pixel, &room, 60 * 60, before);
 
     server.say(&justin, &room, "That's enough.").await;
     wait_mention_rings(&hook, 5).await;
     server.tool(&pixel_token, "read_room", json!({ "hangout_id": room })).await;
     fill_bot_chain(&server, &rex, &room, &pixel).await;
+    let before = now();
     server.say(&rex, &room, "@Pixel after a person").await;
-    assert_hold_secs(&server, &pixel, &room, BOT_CHAIN_HOLD_SECS);
+    assert_hold_secs(&server, &pixel, &room, BOT_CHAIN_HOLD_SECS, before);
 }
 
 // L10: a wake-up URL and a doorbell must not both deliver the same held burst.
@@ -2488,13 +2497,14 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, owner, _) = server.room().await;
     let (_, bot) = server.bot(&owner, &room, "Scout").await;
+    let t = now();
     let old = server
         .post(&owner, &format!("/api/hangouts/{room}/messages"), json!({"text":"old fixture line"}))
         .await;
     server
         .state
         .db
-        .note_wake_ring(&bot, old.body["id"].as_i64().unwrap(), now() - 86401, true)
+        .note_wake_ring(&bot, old.body["id"].as_i64().unwrap(), t - 86401, true)
         .unwrap();
     let mut ids = Vec::new();
     for _ in 0..3 {
@@ -2504,10 +2514,10 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
         ids.push(posted.body["id"].as_i64().unwrap());
     }
     for &id in &ids {
-        server.state.db.hold_mention_wake(&bot, &room, id, now(), now()).unwrap();
+        server.state.db.hold_mention_wake(&bot, &room, id, t, t).unwrap();
     }
     conn.execute_batch("CREATE TRIGGER fail_ring_insert BEFORE INSERT ON wake_rings BEGIN SELECT RAISE(FAIL,'fixture'); END;").unwrap();
-    assert!(server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).is_err());
+    assert!(server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(t)).is_err());
     assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2, ids);
     let retained: i64 = conn
         .query_row("SELECT COUNT(*) FROM wake_rings WHERE agent_id=?", [&bot], |r| r.get(0))
@@ -2520,7 +2530,7 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
             .map(|_| {
                 scope.spawn(|| {
                     barrier.wait();
-                    server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).unwrap()
+                    server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(t)).unwrap()
                 })
             })
             .collect();
@@ -2529,7 +2539,7 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
     assert_eq!(claims.into_iter().flatten().collect::<Vec<_>>(), vec![ids[1]]);
     assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2, vec![ids[2]]);
     assert_eq!(
-        server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).unwrap(),
+        server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(t)).unwrap(),
         None
     );
     let rings: i64 = conn
