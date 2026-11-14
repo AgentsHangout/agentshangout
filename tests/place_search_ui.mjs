@@ -23,7 +23,7 @@ const web = fileURLToPath(new URL('../web/', import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'place-search-'));
 writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
 for (const file of readdirSync(web)) if (file.endsWith('.js')) copyFileSync(join(web, file), join(dir, file));
-const { World, placeMatches, placeLabel } = await import(pathToFileURL(join(dir, 'world.js')).href);
+const { World, placeMatches, placeMatchTotal, placeLabel } = await import(pathToFileURL(join(dir, 'world.js')).href);
 
 // The owners list as the server sends it: [x, y, owner, name]. Owners are people's names.
 const owners = [
@@ -69,6 +69,20 @@ assert.equal(placeLabel(longOwner, `${longCut}'s Workshop`), 'Workshop', 'a 62-c
 const fullOwner = 'B'.repeat(71);
 assert.equal(placeLabel(fullOwner, `${fullOwner}'s Café`), 'Café', 'a roomless place of a 71-character owner is called by its kind');
 assert.deepEqual(placeMatches([[1, 1, fullOwner, `${fullOwner}'s Café`]], 'bbbb'), [], 'the owner part of a 71-character place is never matched');
+
+// #1192, W122: an apostrophe is folded (straight and curly match each other), and a run of spaces
+// collapses, on both the query and the name. Matching is case-blind, as before.
+const apostrophes = [[8, 8, 'Mo', "Mo’s Garden"]];
+assert.deepEqual(names(placeMatches(apostrophes, "mo's garden")), ["Mo’s Garden"], 'a straight apostrophe finds a curly one');
+assert.deepEqual(names(placeMatches([[8, 8, 'Mo', "Mo's Garden"]], 'mo’s garden')), ["Mo's Garden"], 'a curly apostrophe finds a straight one');
+assert.deepEqual(names(placeMatches([[9, 9, 'Cy', 'Corner  Coffee']], 'corner coffee')), ['Corner  Coffee'], 'one space finds a double space in the name');
+assert.deepEqual(names(placeMatches([[9, 9, 'Cy', 'Corner Coffee']], 'corner    coffee')), ['Corner Coffee'], 'a run of spaces in the query finds one space');
+assert.deepEqual(names(placeMatches([[9, 9, 'Cy', 'Corner Coffee']], '  corner coffee  ')), ['Corner Coffee'], 'surrounding spaces are ignored');
+// The cap is still 8, and the total says how many more there are.
+const many = Array.from({ length: 12 }, (_, i) => [i, i, `P${i}`, `Park ${i}`]);
+assert.equal(placeMatches(many, 'park').length, 8, 'the list still stops at 8');
+assert.equal(placeMatchTotal(many, 'park'), 12, 'the total counts every match, not just the 8 listed');
+assert.equal(placeMatchTotal(many, 'nothing'), 0);
 
 // The box on the page: typing fills the list, and a pick moves the view to the place.
 const world = new World(document.createElement('div'), { search: true });
@@ -137,4 +151,20 @@ assert.equal(world.search.active, -1, 'arrows do nothing with the list closed');
 world.pulse.x = world.pulse.y = -1;
 key('Enter');
 assert.deepEqual([world.pulse.x, world.pulse.y], [-1, -1], 'Enter with no list goes nowhere');
+// #1192: past 8 matches the list shows a quiet "N more, keep typing" line that is not a pick.
+world.ownerRows = many;
+world.search.input.value = 'park';
+world.renderSearch();
+assert.equal(world.search.hits.length, 8, 'eight places listed');
+assert.equal(world.search.list.children.length, 9, 'eight places and the more line');
+assert.equal(world.search.list.children[8].textContent, '4 more, keep typing', 'the more line counts the rest');
+assert.equal(world.search.list.children[8].getAttribute('role'), 'presentation', 'the more line is not an option');
+key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown');
+key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown');
+assert.equal(world.search.active, 0, 'nine Downs from nothing: wraps over the 8 places, not the more line');
+world.search.input.value = 'park 1';
+world.renderSearch();
+assert.equal(world.search.hits.length, 3, 'Park 1, Park 10 and Park 11');
+assert.equal(world.search.list.children.length, 3, 'a narrow query lists them all with no more line');
 console.log('The place search lists matching names and moves the view to the pick.');
+

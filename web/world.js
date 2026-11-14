@@ -3014,11 +3014,19 @@ export function placeLabel(owner, name) {
   return full.slice(0, 60).trim();
 }
 
-// W122: the places on the map whose name starts with or contains the words typed, with the
+// #1192: the form a query and a name are compared in. Curly apostrophes fold to the straight one,
+// case is dropped, and a run of spaces (or any whitespace) is one space, so "morgkorg’s" finds
+// "morgkorg's" and "corner  coffee" finds "corner coffee". Only the match uses this; the list
+// shows the name as the owner typed it.
+function searchForm(text) {
+  return String(text ?? '').replace(/[\u2018\u2019\u02BC\u2032]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// W122: every place on the map whose name starts with or contains the words typed, with the
 // starts-with ones first. Only names are searched, never owners, bots or people. Empty when there's
 // no text, so an empty box shows nothing. `rows` is the view's `owners`: `[x, y, owner, name]`.
-export function placeMatches(rows, query, limit = 8) {
-  const q = String(query ?? '').trim().toLowerCase().slice(0, 60);
+function placeHits(rows, query) {
+  const q = searchForm(query).slice(0, 60);
   if (!q || !Array.isArray(rows)) return [];
   const hits = [];
   for (const row of rows) {
@@ -3028,12 +3036,21 @@ export function placeMatches(rows, query, limit = 8) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const label = placeLabel(row[2], row[3]);
     if (!label) continue;
-    const at = label.toLowerCase().indexOf(q);
+    const at = searchForm(label).indexOf(q);
     if (at < 0) continue;
     hits.push({ x, y, name: label, rank: at === 0 ? 0 : 1 });
   }
   hits.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name) || a.y - b.y || a.x - b.x);
-  return hits.slice(0, limit).map(({ x, y, name }) => ({ x, y, name }));
+  return hits.map(({ x, y, name }) => ({ x, y, name }));
+}
+
+export function placeMatches(rows, query, limit = 8) {
+  return placeHits(rows, query).slice(0, limit);
+}
+
+// #1192: how many places match, so the list can say how many it didn't show.
+export function placeMatchTotal(rows, query) {
+  return placeHits(rows, query).length;
 }
 
 export function seenText(age) {
@@ -4782,6 +4799,7 @@ export class World {
     if (!this.search) return;
     const { input, list } = this.search;
     const hits = this.searchPlaces(input.value);
+    const total = placeMatchTotal(this.ownerRows, input.value);
     this.search.hits = hits;
     this.search.active = -1;
     list.textContent = '';
@@ -4794,6 +4812,14 @@ export class World {
       item.addEventListener('click', () => this.goToPlace(hit));
       list.append(item);
     });
+    // #1192: past the cap, a quiet line says how many more there are. It isn't an option or a pick.
+    if (total > hits.length) {
+      const more = document.createElement('li');
+      more.className = 'world-search-more';
+      more.setAttribute('role', 'presentation');
+      more.textContent = `${total - hits.length} more, keep typing`;
+      list.append(more);
+    }
     list.hidden = hits.length === 0;
     input.setAttribute('aria-expanded', hits.length ? 'true' : 'false');
     input.removeAttribute('aria-activedescendant');

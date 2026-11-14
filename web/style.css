@@ -1045,6 +1045,8 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .world-search-list { margin: 2px 0 0; padding: 0; list-style: none; background: #fff8ea; border: 1px solid #4a3320; max-height: 40vh; overflow: auto; }
 .world-search-list li { padding: 4px 8px; cursor: pointer; }
 .world-search-list li:hover, .world-search-list li:focus, .world-search-list li.active { background: #ecd9a6; }
+/* #1192: the "N more, keep typing" line is a hint, not a pick: no hover, no pointer. */
+.world-search-list li.world-search-more, .world-search-list li.world-search-more:hover { cursor: default; background: none; font-style: italic; opacity: .75; }
 .world-live.world-grabbing canvas { cursor: grabbing; }
 .world-live.world-tool canvas { cursor: crosshair; }
 .world-live.world-over canvas { cursor: pointer; }

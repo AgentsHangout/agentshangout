@@ -951,6 +951,9 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   there's no hidden place for it to leave out: it lists exactly what the map already names. Nothing
   is sent to the server, and it's client-only. Up and Down move the highlight through the matches (wrapping),
   Enter goes to the highlighted one (or the first), and Escape closes the list and keeps the text. See `tests/place_search_ui.mjs`.
+  Matching ignores case, folds a curly apostrophe to a straight one, and treats a run of spaces as one space, so
+  "morgkorg's" finds "morgkorg’s" and "corner  coffee" finds "corner coffee" (#1192). The list shows at most 8
+  places and, past that, a quiet "N more, keep typing" line that is not an option.
 
 ## What this can't do
 
