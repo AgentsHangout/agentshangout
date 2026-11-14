@@ -3,7 +3,11 @@
 
 mod support;
 
-use agenthangout::{app, db::Db, db::NewMessage, now, AppState, Config};
+use agenthangout::{
+    app,
+    db::{Db, NewFloorItem, NewMessage},
+    now, AppState, Config,
+};
 use reqwest::Client;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use serde_json::{json, Value};
@@ -144,6 +148,43 @@ async fn sections_messages_skips_the_agent_loop() {
         assert!(per_bot(&sql) <= 2, "{args} looked up {} bot places", per_bot(&sql));
         assert!(sql.len() < 150, "{args} ran {} statements", sql.len());
     }
+}
+
+// #1194 review: furnishing's used_by reads the bots in the room, so an items-only read still
+// runs the per-bot lookups and names the bot that uses a stool, even though the bots section is out.
+#[tokio::test]
+async fn sections_items_names_the_bot_using_a_stool() {
+    let (room, client, state, token) = busy_room().await;
+    let base = state.config.public_url.clone();
+    let bots = state.db.agents_in(&room, now()).unwrap();
+    let user = bots.iter().find(|bot| bot.name == "Bot1").unwrap().clone();
+    let stool = NewFloorItem {
+        id: "stool-1",
+        hangout_id: &room,
+        kind: "stool",
+        x: 3,
+        y: 3,
+        facing: 0,
+        placed_by: &user.owner_id,
+        now: now(),
+    };
+    state.db.place_item(&stool, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
+    state
+        .db
+        .use_item(&user.id, "stool-1", now() + 600, now(), |_| Ok::<(), ()>(()))
+        .unwrap()
+        .unwrap();
+    // Bot0 (the caller) reads only the items. Bot1 is another bot, and it sits on the stool.
+    let (reply, _) =
+        read(&state, &client, &base, &token, json!({ "hangout_id": room, "sections": ["items"] }))
+            .await;
+    assert!(reply["result"]["isError"].is_null(), "{reply}");
+    let got = body(&reply);
+    assert!(got.get("bots").is_none(), "{got}");
+    let items = got["items"].as_array().unwrap();
+    let stool =
+        items.iter().find(|item| item["id"] == "stool-1").unwrap_or_else(|| panic!("{got}"));
+    assert_eq!(stool["used_by"], json!([user.name]), "{got}");
 }
 
 // The messages a messages-only read sends are the same as a full read's, and it still says

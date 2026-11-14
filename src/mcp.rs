@@ -2494,8 +2494,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // bot's place (#1194).
     let sections = read_sections(args)?;
     let sends_bots = sections.as_ref().is_none_or(|chosen| chosen.contains(&"bots"));
+    let sends_items = sections.as_ref().is_none_or(|chosen| chosen.contains(&"items"));
+    // #1194 review: furnishing's used_by reads the bots whose place is here, so items need the
+    // per-bot lookups too, even when the bots section is left out.
     // #940: read_room lists votes itself (votes::for_room below), so the snapshot doesn't build them.
-    let snapshot = ops::snapshot_for_read(state, caller, &hangout.id, sends_bots)?;
+    let snapshot = ops::snapshot_for_read(state, caller, &hangout.id, sends_bots || sends_items)?;
     // I122: a read that leaves out messages shows none, so it marks none read either.
     let sends_messages = sections.as_ref().is_none_or(|chosen| chosen.contains(&"messages"));
     // B8: reading the room is what clears mentions. The doorbell's own reads don't, so a mention

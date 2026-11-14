@@ -2259,8 +2259,8 @@ pub fn snapshot_without_votes(
 
 /// #1194: the snapshot for a read_room that sends only some sections. With `with_bots` false, the
 /// bots in the room are not looked up one by one: only the caller's own bot is, for `you_are_here`.
-/// Nothing else in the read reads another bot's place, drive or home, since only the bots section
-/// shows them.
+/// The caller passes true when the read sends items too, since furnishing's `used_by` needs the
+/// bots whose place is here.
 pub fn snapshot_for_read(
     state: &AppState,
     caller: &Caller,
