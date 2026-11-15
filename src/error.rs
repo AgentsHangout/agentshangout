@@ -53,6 +53,21 @@ impl ApiError {
         self
     }
 
+    /// The refusal as JSON: `error`, `reason` when set, and the details beside them. REST sends
+    /// this as the body; MCP sends it as a refusal's text block too (S7, #1231).
+    pub fn body(&self) -> serde_json::Value {
+        let mut body = match self.reason {
+            Some(reason) => json!({ "error": self.message, "reason": reason }),
+            None => json!({ "error": self.message }),
+        };
+        if let Some(serde_json::Value::Object(details)) = &self.details {
+            for (key, value) in details {
+                body.as_object_mut().unwrap().entry(key.clone()).or_insert(value.clone());
+            }
+        }
+        body
+    }
+
     pub fn retry_after(mut self, secs: u64) -> Self {
         self.retry_after = Some(secs);
         self
@@ -118,16 +133,7 @@ impl From<crate::db::DoorMintRefusal> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let wait = self.wait();
-        let mut body = match self.reason {
-            Some(reason) => json!({ "error": self.message, "reason": reason }),
-            None => json!({ "error": self.message }),
-        };
-        if let Some(serde_json::Value::Object(details)) = self.details {
-            for (key, value) in details {
-                body.as_object_mut().unwrap().entry(key).or_insert(value);
-            }
-        }
-        let mut response = (self.status, Json(body)).into_response();
+        let mut response = (self.status, Json(self.body())).into_response();
         if let Some(secs) = wait {
             response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
         }

@@ -16,6 +16,12 @@ use futures_util::future::join_all;
 use reqwest::Method;
 use serde_json::{json, Value};
 
+/// A refused tool call's message: `error` in the JSON text block of a refusal with a code (#1231).
+fn refusal_error(reply: &Value) -> String {
+    let body: Value = serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+    body["error"].as_str().unwrap().to_string()
+}
+
 const CODE: &str = "letmein";
 
 fn text(value: &Value) -> String {
@@ -256,7 +262,7 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     let args = json!({ "item_id": "cabinet-1", "challenge": "Rex" });
     let refused = tool(&w.base, &scout_token, "use_item", args).await;
     assert_eq!(refused["structuredContent"]["code"], "duels_off", "{refused}");
-    assert!(text(&refused["content"][0]["text"]).starts_with("duels_off: "), "{refused}");
+    assert!(refusal_error(&refused).starts_with("duels_off: "), "{refused}");
     assert_eq!(w.allow(&w.key, &scout, json!({ "allow": "room" })).await.0, 200);
     // GM21: Rex's allow doesn't take Scout, so the ask goes to Rex's owner. Rex's inbox has nothing.
     let to_owner = w.challenge(&scout_caller, "Rex").unwrap();

@@ -30,7 +30,8 @@ The rules are MA1 to MA8. Each has a test in `tests/mcp_apps.rs`.
 - **S7. One answer, in the text block.** A tool's result is the JSON in `content[0].text`. No tool
   declares an `outputSchema`, so tools no longer send a second copy as `structuredContent`. Two
   keep it: `open_collaboration_board`, and `read_room`, whose text is Markdown. A refusal with a
-  code (CP15) still sends its details as `structuredContent`.
+  code (CP15) sends its text block as the JSON of the REST error body (`error`, and the code and
+  fields beside it), and still sends its details as `structuredContent` (#1231).
 
 - **MA4. Non-UI fallback.** Clients without UI support (such as Codex CLI, IDE, or standard MCP
   terminal clients) receive a complete text representation: room name, purpose, whiteboard,

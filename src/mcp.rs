@@ -137,6 +137,21 @@ const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in
 /// The only tools a house bot has, and the ones nobody else may use.
 const HOUSE_TOOLS: [&str; 3] = ["house_queue", "finish_request", "set_house_status"];
 
+/// A refused tool call (#1231). A refusal with details (a `code`, CP15) sends its text block as
+/// the JSON a success uses (S7): the same body REST sends, with the details beside `error`. Its
+/// details also go as structuredContent, so a bot can branch on them (CP15, V17). A plain refusal
+/// keeps its message as the text.
+fn refusal_result(error: &crate::error::ApiError) -> Value {
+    let Some(details) = &error.details else {
+        return json!({ "content": [{ "type": "text", "text": error.message }], "isError": true });
+    };
+    json!({
+        "content": [{ "type": "text", "text": error.body().to_string() }],
+        "structuredContent": details,
+        "isError": true,
+    })
+}
+
 /// #748 surface 1: a brief or incremental read leaves out `keyless` when it's false. The
 /// trust fields (from_your_side, is_bot, owner) stay on every line.
 fn drop_false_keyless(line: &mut Value) {
@@ -5002,20 +5017,10 @@ fn dispatch(
                     res
                 }
                 Err(error) => {
-                    sent = error.message.chars().count();
-                    // CP15, V17: a refusal's fields (such as a `code`) are sent as structured
-                    // content, so a bot can branch on them.
-                    match error.details {
-                        Some(details) => json!({
-                            "content": [{ "type": "text", "text": error.message }],
-                            "structuredContent": details,
-                            "isError": true,
-                        }),
-                        None => json!({
-                            "content": [{ "type": "text", "text": error.message }],
-                            "isError": true,
-                        }),
-                    }
+                    let refusal = refusal_result(&error);
+                    sent =
+                        refusal["content"][0]["text"].as_str().unwrap_or_default().chars().count();
+                    refusal
                 }
             };
             // U26: what the bot's model is handed back, counted for its owner.
@@ -5199,13 +5204,7 @@ pub async fn handle(
             Ok((metadata, png)) => {
                 json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}]})
             }
-            // CP15: a refusal's code, and for a full quota when it frees, to branch on.
-            Err(error) => match error.details {
-                Some(details) => {
-                    json!({"content":[{"type":"text","text":error.message}],"structuredContent":details,"isError":true})
-                }
-                None => json!({"content":[{"type":"text","text":error.message}],"isError":true}),
-            },
+            Err(error) => refusal_result(&error),
         };
         return Json(rpc_result(id, result)).into_response();
     }
@@ -5506,6 +5505,39 @@ mod tests {
         let result = call(world, caller, name, args);
         assert_eq!(result["isError"], true, "{name} should have been refused: {result}");
         result["content"][0]["text"].as_str().unwrap().to_string()
+    }
+
+    /// #1231: a refusal with a code has a text block a client can parse, with the code and the
+    /// fields, and structuredContent carries the same details. A plain refusal stays plain text.
+    #[test]
+    fn a_refusal_text_block_carries_its_code_and_fields_1231() {
+        let error =
+            crate::error::ApiError::conflict("that's in use by Cake Claude until 18:27:30Z")
+                .with_details(json!({
+                    "code": "in_use",
+                    "ok": false,
+                    "who": ["Cake Claude"],
+                    "until": "2026-11-15T18:27:30Z",
+                    "item_id": "WY6JWuTZzZReQp1f",
+                    "next": null,
+                }));
+        let result = refusal_result(&error);
+        assert_eq!(result["isError"], true);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"], "that's in use by Cake Claude until 18:27:30Z");
+        assert_eq!(body["code"], "in_use");
+        assert_eq!(body["who"], json!(["Cake Claude"]));
+        assert_eq!(body["until"], "2026-11-15T18:27:30Z");
+        assert_eq!(body["item_id"], "WY6JWuTZzZReQp1f");
+        assert_eq!(body["ok"], false);
+        assert_eq!(result["structuredContent"]["code"], "in_use");
+        assert!(result["structuredContent"].get("error").is_none());
+
+        // A refusal with no details keeps its message as the text, and sends no structuredContent.
+        let plain = refusal_result(&crate::error::ApiError::not_found());
+        assert_eq!(plain["content"][0]["text"], "not found");
+        assert!(plain.get("structuredContent").is_none());
     }
 
     #[test]

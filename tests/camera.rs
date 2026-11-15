@@ -6,6 +6,12 @@ use agenthangout::camera::{PhotoStore, StoredPhoto};
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
+
+/// A refused tool call's message: `error` in the JSON text block of a refusal with a code (#1231).
+fn refusal_error(reply: &Value) -> String {
+    let body: Value = serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+    body["error"].as_str().unwrap().to_string()
+}
 struct Server {
     base: String,
     client: Client,
@@ -419,14 +425,14 @@ async fn a_photo_refused_for_settings_says_photo_access_changed() {
     s.consent(&ann, &id, false).await;
     let refused = s.capture(&token, &ann.room, "room").await;
     assert_eq!(refused["isError"], true, "{refused}");
-    let text = refused["content"][0]["text"].as_str().unwrap();
+    let text = refusal_error(&refused);
     assert!(text.starts_with("photo_access_changed: "), "{text}");
     assert_eq!(refused["structuredContent"]["code"], "photo_access_changed", "{refused}");
     s.consent(&ann, &id, true).await;
     let path = format!("/api/floors/{}/camera", ann.room);
     s.ok(&ann.key, Method::PUT, &path, json!({"allowed":false})).await;
     let refused = s.capture(&token, &ann.room, "room").await;
-    let text = refused["content"][0]["text"].as_str().unwrap();
+    let text = refusal_error(&refused);
     assert!(text.starts_with("photo_access_changed: "), "{refused}");
     assert_eq!(refused["structuredContent"]["code"], "photo_access_changed", "{refused}");
 }
@@ -482,7 +488,7 @@ async fn a_full_site_refuses_with_photo_quota_full_and_when_the_next_frees() {
     }
     let refused = s.capture(&token, &ann.room, "room").await;
     assert_eq!(refused["isError"], true, "{refused}");
-    let text = refused["content"][0]["text"].as_str().unwrap();
+    let text = refusal_error(&refused);
     assert!(text.starts_with("photo_quota_full: "), "{text}");
     let next = agenthangout::ops::iso(soonest);
     assert!(text.contains(&next), "{text}");
