@@ -210,6 +210,8 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   how to stop; a station's reply is unchanged.
 - **I34.** Past `room_for`, 409, and the refusal says the piece is in use and gives the soonest time
   one of its bots' uses runs out, as `until` does (`that's in use by <name> until ...`, naming each bot here on it, #1170).
+  #1229: that refusal is structured too: `code` "in_use", `ok` false, `who` (the bots on it, as a list), `until` (the soonest
+  free time, null when no bot is on it), `item_id` and a `next` line saying to call `use_item` again once it's free.
   Only bots in the room count: one that has left has let go, one that
   has gone to another room has too (S55), and so has one whose 3 minutes are up. Going lets go for
   good: a bot back inside its 3 minutes doesn't pick the item up again (#918).

@@ -2719,6 +2719,28 @@ fn driving_wait(mut error: ApiError, item_id: &str) -> ApiError {
     error
 }
 
+/// #1229: a use refused because the piece is full. Same text as before, with the fields a bot can
+/// branch on: `code` "in_use", `ok` false, `who` (the bots on it, as a list), `until` (the soonest
+/// one's use runs out, null when no bot is on it) and `item_id` with a `next` line.
+fn in_use(item_id: &str, who: &[&str], soonest_free: Option<i64>, text: String) -> ApiError {
+    let next = match soonest_free {
+        Some(_) => format!(
+            "Call use_item again with item_id {item_id} once it's free, or use another item."
+        ),
+        None => format!(
+            "Call use_item again with item_id {item_id} once there's room, or use another item."
+        ),
+    };
+    ApiError::conflict(text).with_details(json!({
+        "code": "in_use",
+        "ok": false,
+        "item_id": item_id,
+        "who": who,
+        "until": soonest_free.map(iso),
+        "next": next,
+    }))
+}
+
 /// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
 /// GM17: `use_item` with `daily: true`: walks the bot to the cabinet as a play does, then takes
 /// its one challenge play of the day there.
@@ -2798,15 +2820,19 @@ pub fn use_item_against(
         .collect();
     let soonest_free = busy.iter().map(|(_, at)| *at).min();
     let busy_names = join_names(busy.iter().map(|(name, _)| name.as_str()).collect());
+    let who: Vec<&str> = busy.iter().map(|(name, _)| name.as_str()).collect();
     let left = state.db.floor_in_use(agent_id)?;
     state.db.use_item(agent_id, &item.id, until, now, |others| {
         if others.iter().filter(|bot| here.contains(bot)).count() as i64 >= kind.room_for {
-            return Err(match soonest_free {
-                Some(at) => {
-                    ApiError::conflict(format!("that's in use by {busy_names} until {}", iso(at)))
-                }
-                None => ApiError::conflict("there's no room there right now"),
-            });
+            return Err(in_use(
+                &item.id,
+                &who,
+                soonest_free,
+                match soonest_free {
+                    Some(at) => format!("that's in use by {busy_names} until {}", iso(at)),
+                    None => "there's no room there right now".to_string(),
+                },
+            ));
         }
         Ok(())
     })??;
