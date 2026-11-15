@@ -5,7 +5,7 @@ mod support;
 
 use agenthangout::{
     app,
-    db::Db,
+    db::{Db, NewFloorItem},
     now, travel,
     world::{self, Kind},
     worlds::{self, Move},
@@ -338,4 +338,41 @@ async fn a_photo_mid_drive_says_how_long_is_left_then_works_on_arrival() {
     travel::settle_trips(&server.state, drive.arrive_at);
     let photo = server.call(&town.token, "take_snapshot", snap(&town.club)).await;
     assert!(photo["isError"].is_null(), "{photo}");
+}
+
+// CR6, #1223: a use of an item in the room a bot is driving to is refused with a structured
+// `driving` code and how long is left, then works once the bot has arrived.
+#[tokio::test]
+async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let stool = NewFloorItem {
+        id: "stool-1223",
+        hangout_id: &town.club,
+        kind: "stool",
+        x: 3,
+        y: 3,
+        facing: 0,
+        placed_by: &town.owner.id,
+        now: now(),
+    };
+    server.state.db.place_item(&stool, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
+    // The first use starts the drive itself (no go_to_room first), and is refused as driving.
+    let refused = server.call(&town.token, "use_item", json!({ "item_id": "stool-1223" })).await;
+    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
+    assert_eq!(refused["isError"], true, "{refused}");
+    let fields = &refused["structuredContent"];
+    assert_eq!(fields["code"], "driving", "{refused}");
+    assert_eq!(fields["ok"], false, "{refused}");
+    assert_eq!(fields["driving"], true, "{refused}");
+    assert_eq!(fields["item_id"], "stool-1223", "{refused}");
+    assert!(fields["arrives_in"].as_i64().unwrap() >= 1, "{refused}");
+    assert_eq!(fields["arrives_in"], fields["retry_after"], "{refused}");
+    assert!(fields["next"].as_str().unwrap().contains("use_item"), "{refused}");
+    assert!(refused.to_string().contains("You're driving to"), "{refused}");
+    assert_eq!(server.at(&town.rover).as_deref(), Some(town.cafe.as_str()));
+    travel::settle_trips(&server.state, drive.arrive_at);
+    let used = server.tool(&town.token, "use_item", json!({ "item_id": "stool-1223" })).await;
+    assert_eq!(used["ok"], true, "{used}");
+    assert_eq!(server.at(&town.rover).as_deref(), Some(town.club.as_str()));
 }
