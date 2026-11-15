@@ -4520,8 +4520,18 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
     assert_eq!(unique.len(), words.len(), "a category is listed twice: {words:?}");
     // Every paid pack has its own category, so a new pack can't be left out of the catalog.
     for pack in items::PACKS.iter().filter(|pack| pack.cost > 0) {
-        let placed = items::kind_of(pack.items[0].kind).unwrap().category;
-        assert!(words.contains(&placed), "{} has no category", pack.pack);
+        assert!(!pack.items.is_empty(), "{} has no pieces", pack.pack);
+        for item in pack.items {
+            let kind = items::kind_of(item.kind)
+                .unwrap_or_else(|| panic!("{}: {} is not a known kind", pack.pack, item.kind));
+            assert!(
+                words.contains(&kind.category),
+                "{}: {} has no category ({})",
+                pack.pack,
+                item.kind,
+                kind.category
+            );
+        }
     }
     for word in &words {
         assert!(items::CATALOG.iter().any(|kind| kind.category == *word), "nothing in {word}");
