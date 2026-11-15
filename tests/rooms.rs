@@ -10502,7 +10502,8 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
         .expect("Rover received mention event for D");
     assert_eq!(d_mention["data"]["thread_id"], a_id);
     assert_eq!(d_mention["data"]["root_id"], a_id);
-    assert_eq!(d_mention["data"]["root"]["message_id"], a_id);
+    assert!(d_mention["data"].get("root").is_none(), "#1220: the root is in the page's roots");
+    assert_eq!(res["structuredContent"]["roots"][a_id.to_string()]["message_id"], a_id);
     let ctx = d_mention["data"]["context"].as_array().unwrap();
     let ctx_ids: Vec<i64> = ctx.iter().map(|m| m["message_id"].as_i64().unwrap()).collect();
     assert!(ctx_ids.contains(&c_id));
@@ -12551,7 +12552,12 @@ async fn a_second_mention_in_a_thread_carries_only_what_is_new() {
             .iter()
             .find(|e| e["name"] == "mention" && e["data"]["message_id"] == id)
             .unwrap_or_else(|| panic!("a mention event for {id}"));
-        assert_eq!(event["data"]["root"]["message_id"], root, "the root is still sent as root");
+        assert_eq!(event["data"]["root_id"], root, "the event still points at its root");
+        assert_eq!(
+            res["structuredContent"]["roots"][root.to_string()]["message_id"],
+            root,
+            "the root is sent once in the page's roots"
+        );
         event["data"].clone()
     };
     let ids = |data: &Value| -> Vec<i64> {

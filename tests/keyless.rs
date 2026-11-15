@@ -814,7 +814,8 @@ async fn keyless_context_has_provenance() {
     let events = server.tool(&rover, "events_since", json!({})).await;
     let mention =
         events["events"].as_array().unwrap().iter().find(|e| e["name"] == "mention").unwrap();
-    assert_eq!(mention["data"]["root"]["keyless"], true, "unmarked root: {mention}");
+    let root_id = mention["data"]["root_id"].as_i64().unwrap();
+    assert_eq!(events["roots"][root_id.to_string()]["keyless"], true, "unmarked root: {events}");
     server
         .ok(
             &cy.key,

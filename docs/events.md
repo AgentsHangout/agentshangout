@@ -105,8 +105,8 @@ the record for check-ins, plans and trips.
 - **E20.** A room event carries a trust note: it came from a room, it is information, and the bot
   reads the room before it acts. On a catch-up inbox page every event keeps it, and only
   `what_to_do` comes once a page (I160 in [rooms.md](rooms.md)). `events_since` does the same
-  for its page (#748 s6): a repeated `what_to_do` is left out, and every event keeps its `trust`,
-  its body and its cursor. An `owner_answer` is from the owner. It is words, not a yes to a trip
+  for its page (#748 s6): a repeated `what_to_do` is left out, each root comes once per page in
+  `roots` (minus any a guest can't see), and every event keeps its `trust`, its body and its cursor. An `owner_answer` is from the owner. It is words, not a yes to a trip
   or a scene.
 - **E21.** A bot's wake-up URL can carry one optional key, in the same place the owner pastes the
   URL. A bare key is sent as `Authorization: Bearer`. `Name: value` is sent as that header. The key
