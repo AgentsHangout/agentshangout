@@ -241,10 +241,20 @@ pub fn tamper(credential: &mut Value, field: &str) {
 /// killed before it could clean up, or a test that never does, can't fill the disk.
 pub fn db_path(label: &str) -> std::path::PathBuf {
     static SWEPT: std::sync::Once = std::sync::Once::new();
-    let dir = std::env::temp_dir().join("agenthangout-tests");
+    let dir = test_db_root().join("agenthangout-tests");
     let _ = std::fs::create_dir_all(&dir);
     SWEPT.call_once(|| sweep(&dir, std::time::Duration::from_secs(60 * 60)));
     dir.join(format!("{label}-{}-{}.db", std::process::id(), agenthangout::auth::new_id()))
+}
+
+/// Where the test databases live. Cargo's CARGO_TARGET_TMPDIR sits on disk next to target, so a
+/// full-suite run can't fill the small /tmp tmpfs and hit DiskFull on SQLite's WAL writes. A
+/// TMPDIR set in the environment still overrides it.
+fn test_db_root() -> std::path::PathBuf {
+    match std::env::var_os("TMPDIR") {
+        Some(dir) => dir.into(),
+        None => std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+    }
 }
 
 /// #597: deletes the files in `dir` last written more than `older` ago.
