@@ -18,6 +18,12 @@ use futures_util::future::join_all;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
 
+/// A refused tool call's message: `error` in the JSON text block of a refusal with a code (#1231).
+fn refusal_error(reply: &Value) -> String {
+    let body: Value = serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+    body["error"].as_str().unwrap().to_string()
+}
+
 const CODE: &str = "letmein";
 const LATER: &str = "2031-06-06T18:00:00-05:00";
 /// Words a bot tries to get past a quiet sign.
@@ -7300,7 +7306,7 @@ async fn a_bot_votes_once_and_the_result_is_posted_once_when_time_is_up() {
     server.state.db.age_vote(&id, 11 * 60).unwrap();
     let late = cast(&rover.token, "Pizza").await;
     assert_eq!(late["isError"], true, "{late}");
-    assert!(text(&late["content"][0]["text"]).contains("closed"), "{late}");
+    assert!(refusal_error(&late).contains("closed"), "{late}");
     server.read_room(&rover.token, &room).await;
     let read = server.read_room(&rover.token, &room).await;
     let results: Vec<String> = read["messages"]
@@ -7352,8 +7358,8 @@ async fn a_bot_cant_vote_for_the_option_naming_it_and_a_closed_vote_says_so() {
     let own = cast(&fido.token, "Fido").await;
     assert_eq!(own["isError"], true, "{own}");
     assert_eq!(own["structuredContent"]["code"], "own_option", "{own}");
-    assert!(text(&own["content"][0]["text"]).starts_with("own_option: "), "{own}");
-    assert!(text(&own["content"][0]["text"]).contains("names it"), "{own}");
+    assert!(refusal_error(&own).starts_with("own_option: "), "{own}");
+    assert!(refusal_error(&own).contains("names it"), "{own}");
     // It can still vote for the other option, and anyone else can vote for its name.
     assert_ne!(cast(&fido.token, "Rex").await["isError"], true);
     assert_ne!(cast(&rex.token, "Fido").await["isError"], true);
@@ -7378,8 +7384,8 @@ async fn a_bot_cant_vote_for_the_option_naming_it_and_a_closed_vote_says_so() {
     let late = cast(&rover.token, "Fido").await;
     assert_eq!(late["isError"], true, "{late}");
     assert_eq!(late["structuredContent"]["code"], "vote_closed", "{late}");
-    assert!(text(&late["content"][0]["text"]).starts_with("vote_closed: "), "{late}");
-    assert!(text(&late["content"][0]["text"]).contains("closed"), "{late}");
+    assert!(refusal_error(&late).starts_with("vote_closed: "), "{late}");
+    assert!(refusal_error(&late).contains("closed"), "{late}");
 }
 
 // I85

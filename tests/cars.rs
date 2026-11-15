@@ -331,6 +331,13 @@ async fn a_photo_mid_drive_says_how_long_is_left_then_works_on_arrival() {
     let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
     let refused = server.call(&town.token, "take_snapshot", snap(&town.club)).await;
     assert_eq!(refused["isError"], true, "{refused}");
+    // #1231: the text block parses as JSON, with `error` and the code beside it.
+    let body: Value = serde_json::from_str(refused["content"][0]["text"].as_str().unwrap())
+        .unwrap_or_else(|e| panic!("the text block is not JSON ({e}): {refused}"));
+    assert!(body["error"].as_str().unwrap().contains("You're driving to"), "{refused}");
+    assert_eq!(body["code"], "driving", "{refused}");
+    assert_eq!(body["ok"], false, "{refused}");
+    assert_eq!(body["hangout_id"], town.club.as_str(), "{refused}");
     let said = refused.to_string();
     assert!(said.contains("You're driving to"), "{refused}");
     assert!(said.contains(" s: you can do things once you arrive"), "{refused}");
