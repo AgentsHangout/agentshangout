@@ -2719,6 +2719,50 @@ fn driving_wait(mut error: ApiError, item_id: &str) -> ApiError {
     error
 }
 
+/// #1229: a use refused because the piece is full. Same text as before, with the fields a bot can
+/// branch on: `code` "in_use", `ok` false, `who` (the bots on it, as a list), `until` (the soonest
+/// one's use runs out, null when no bot is on it) and `item_id` with a `next` line.
+fn in_use(item_id: &str, who: &[&str], soonest_free: Option<i64>, text: String) -> ApiError {
+    let next = match soonest_free {
+        Some(_) => format!(
+            "Call use_item again with item_id {item_id} once it's free, or use another item."
+        ),
+        None => format!(
+            "Call use_item again with item_id {item_id} once there's room, or use another item."
+        ),
+    };
+    ApiError::conflict(text).with_details(json!({
+        "code": "in_use",
+        "ok": false,
+        "item_id": item_id,
+        "who": who,
+        "until": soonest_free.map(iso),
+        "next": next,
+    }))
+}
+
+#[cfg(test)]
+mod in_use_tests {
+    use super::*;
+
+    // #1229: the no-room refusal (nobody's until to wait for) still says code in_use, ok false,
+    // an empty who, until null, and a next line that says once there's room.
+    #[test]
+    fn a_refusal_with_no_room_says_in_use_with_no_until() {
+        let error = in_use("item_1", &[], None, "there's no room there right now".into());
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.message, "there's no room there right now");
+        let details = error.details.expect("details");
+        assert_eq!(details["code"], "in_use");
+        assert_eq!(details["ok"], false);
+        assert_eq!(details["who"], json!([]));
+        assert!(details["until"].is_null(), "{details}");
+        assert_eq!(details["item_id"], "item_1");
+        let next = details["next"].as_str().expect("next");
+        assert!(next.contains("use_item") && next.contains("once there's room"), "{next}");
+    }
+}
+
 /// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
 /// GM17: `use_item` with `daily: true`: walks the bot to the cabinet as a play does, then takes
 /// its one challenge play of the day there.
@@ -2798,15 +2842,19 @@ pub fn use_item_against(
         .collect();
     let soonest_free = busy.iter().map(|(_, at)| *at).min();
     let busy_names = join_names(busy.iter().map(|(name, _)| name.as_str()).collect());
+    let who: Vec<&str> = busy.iter().map(|(name, _)| name.as_str()).collect();
     let left = state.db.floor_in_use(agent_id)?;
     state.db.use_item(agent_id, &item.id, until, now, |others| {
         if others.iter().filter(|bot| here.contains(bot)).count() as i64 >= kind.room_for {
-            return Err(match soonest_free {
-                Some(at) => {
-                    ApiError::conflict(format!("that's in use by {busy_names} until {}", iso(at)))
-                }
-                None => ApiError::conflict("there's no room there right now"),
-            });
+            return Err(in_use(
+                &item.id,
+                &who,
+                soonest_free,
+                match soonest_free {
+                    Some(at) => format!("that's in use by {busy_names} until {}", iso(at)),
+                    None => "there's no room there right now".to_string(),
+                },
+            ));
         }
         Ok(())
     })??;

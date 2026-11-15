@@ -5100,6 +5100,13 @@ async fn a_busy_piece_refusal_names_the_bot_using_it() {
         full["error"],
         format!("that's in use by Scout until {}", text(&scout_use["until"]))
     );
+    // #1229: the same refusal says so in fields a bot can branch on.
+    assert_eq!(full["code"], "in_use", "{full}");
+    assert_eq!(full["ok"], false, "{full}");
+    assert_eq!(full["who"], json!(["Scout"]), "{full}");
+    assert_eq!(full["until"], scout_use["until"], "{full}");
+    assert_eq!(full["item_id"], stool.as_str(), "{full}");
+    assert!(text(&full["next"]).contains("use_item"), "{full}");
 }
 
 #[tokio::test]
