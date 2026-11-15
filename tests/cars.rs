@@ -357,9 +357,9 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
         now: now(),
     };
     server.state.db.place_item(&stool, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
-    server.tool(&town.token, "go_to_room", json!({ "hangout_id": town.club })).await;
-    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
+    // The first use starts the drive itself (no go_to_room first), and is refused as driving.
     let refused = server.call(&town.token, "use_item", json!({ "item_id": "stool-1223" })).await;
+    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
     assert_eq!(refused["isError"], true, "{refused}");
     let fields = &refused["structuredContent"];
     assert_eq!(fields["code"], "driving", "{refused}");
