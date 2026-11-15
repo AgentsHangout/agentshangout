@@ -798,11 +798,22 @@ async fn keyless_context_has_provenance() {
     server.tool(&rover, "go_out", json!({"floor_id": floor})).await;
     let key = server.keyless(1).await;
     server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
-    arrived().await;
     let said = server
         .public("floor_say", json!({"player_token": key, "text": "unverified assertion"}))
         .await;
     let id = said["structuredContent"]["message_id"].as_i64().unwrap();
+    // Timestamps are whole seconds, so a root written in the visit's own second can't be told
+    // apart from one before it. Put the root one second after the visit starts, so it's past the visit.
+    let visit = server.state.db.bot_visit(&floor, &rover_id, now()).unwrap().unwrap();
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "UPDATE messages SET created_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, visit.since + 1],
+        )
+        .unwrap();
     server
         .ok(
             &cy.key,
