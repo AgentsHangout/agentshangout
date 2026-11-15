@@ -2555,7 +2555,8 @@ pub fn guest_messages(
         Some(agent_id) => state.db.arrival_cut(hangout_id, agent_id, visit.since)?,
         None => None,
     };
-    let mut messages = state.db.messages_since_as(hangout_id, visit.since, cut, after, limit)?;
+    let mut messages =
+        state.db.messages_since_as(hangout_id, visit.since, as_agent, cut, after, limit)?;
     if let Some((after_id, _)) = state.db.visitor_history(hangout_id)? {
         let mut earlier = state.db.chat_before_arrival(
             hangout_id,

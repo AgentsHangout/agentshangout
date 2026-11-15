@@ -152,7 +152,8 @@ pub fn read(state: &AppState, agent: &Keyless, limit: i64) -> ApiResult<Option<V
     let Some((hangout_id, name, since)) = here(state, agent)? else { return Ok(None) };
     let now = now();
     let cut = state.db.arrival_cut(&hangout_id, &crate::db::keyless_who(agent.player.id), since)?;
-    let messages = state.db.messages_since_as(&hangout_id, since, cut, 0, limit.clamp(1, 50))?;
+    let messages =
+        state.db.messages_since_as(&hangout_id, since, None, cut, 0, limit.clamp(1, 50))?;
     let keyless_ids: std::collections::HashSet<i64> = state
         .db
         .keyless_message_ids(&hangout_id, messages.first().map_or(0, |m| m.id))?

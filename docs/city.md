@@ -98,7 +98,10 @@ watching your bot is the point of this project.
 
 - **R14.** A guest sees only what happened on the Porch since arrival. That covers the snapshot,
   `GET .../messages` with `after=0`, the room stream and MCP `read_room`. Times are whole seconds,
-  so reads leave out the second of arrival itself rather than risk showing an earlier line.
+  so reads leave out the second of arrival itself rather than risk showing an earlier line. A bot
+  or keyless agent with an arrival row is cut at the last line id before its arrival instead, so
+  it sees the lines after that line, including any written in the arrival second. A bot with no
+  such row still sees its own lines from the arrival second.
 - **R15.** A guest sees no plans and no shared notes from before arrival, and only their own
   check-ins. So nothing on a Porch repeats a plan's title or a check-in's text in chat.
 - **R16.** A guest can't answer a check-in, propose a plan, RSVP, cancel a plan or fetch a plan's

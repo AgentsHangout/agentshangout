@@ -8139,6 +8139,7 @@ impl Db {
 
     /// S84: chat a walk-in sees from before they arrived: chat lines only, after `after_id` and
     /// written from `from` up to their arrival, the latest `limit` of them, oldest first.
+    #[allow(clippy::too_many_arguments)]
     pub fn chat_before_arrival(
         &self,
         hangout_id: &str,
@@ -11020,6 +11021,7 @@ impl Db {
         &self,
         hangout_id: &str,
         since: i64,
+        as_agent: Option<&str>,
         cut: Option<i64>,
         after: i64,
         limit: i64,
@@ -11027,12 +11029,15 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND (CASE WHEN ?3 IS NULL THEN created_at > ?2 ELSE id > ?3 END)
-               AND id > ? AND kind != 'note'
-             ORDER BY id LIMIT ?"
+             WHERE hangout_id = ?1 AND (CASE WHEN ?3 IS NULL
+                   THEN (created_at > ?2 OR (created_at = ?2 AND agent_id = ?5)) ELSE id > ?3 END)
+               AND id > ?4 AND kind != 'note'
+             ORDER BY id LIMIT ?6"
         ))?;
+        // An empty agent id matches nothing, since every bot has a real one.
+        let own = as_agent.unwrap_or("");
         let rows =
-            stmt.query_map(params![hangout_id, since, cut, after, limit], message_from_row)?;
+            stmt.query_map(params![hangout_id, since, cut, after, own, limit], message_from_row)?;
         rows.collect()
     }
 
@@ -12605,15 +12610,17 @@ impl Db {
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
-        self.messages_since_as(hangout_id, since, None, after, limit)
+        self.messages_since_as(hangout_id, since, None, None, after, limit)
     }
 
     /// Chat lines a guest reads: those after its `cut` (the arrival's last line, from
-    /// `arrival_cut`), or else those written after `since` the second it arrived (R14, #1235).
+    /// `arrival_cut`), or else those written after `since` the second it arrived, plus the
+    /// caller's own lines from that second (R14).
     pub fn messages_since_as(
         &self,
         hangout_id: &str,
         since: i64,
+        as_agent: Option<&str>,
         cut: Option<i64>,
         after: i64,
         limit: i64,
@@ -12621,12 +12628,15 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND (CASE WHEN ?3 IS NULL THEN created_at > ?2 ELSE id > ?3 END)
-               AND id > ? AND kind != 'note'
-             ORDER BY id DESC LIMIT ?"
+             WHERE hangout_id = ?1 AND (CASE WHEN ?3 IS NULL
+                   THEN (created_at > ?2 OR (created_at = ?2 AND agent_id = ?5)) ELSE id > ?3 END)
+               AND id > ?4 AND kind != 'note'
+             ORDER BY id DESC LIMIT ?6"
         ))?;
+        // An empty agent id matches nothing, since every bot has a real one.
+        let own = as_agent.unwrap_or("");
         let rows =
-            stmt.query_map(params![hangout_id, since, cut, after, limit], message_from_row)?;
+            stmt.query_map(params![hangout_id, since, cut, after, own, limit], message_from_row)?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
         Ok(messages)
@@ -20570,6 +20580,57 @@ mod tests {
     }
 
     #[test]
+    fn without_an_arrival_cut_a_bot_keeps_its_own_lines_from_the_arrival_second() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute_batch(
+                "INSERT INTO spaces (id,owner_id,kind,name,about,created_at)
+                    VALUES ('hz-porch','p1','third','Porch','',0);
+                 INSERT INTO floors (hangout_id,space_id,level,access)
+                    VALUES ('hz-porch','hz-porch',0,'public');",
+            )
+            .unwrap();
+        let said = |agent: Option<&str>, body: &str, now: i64| {
+            db.insert_message(&NewMessage {
+                hangout_id: "hz-porch",
+                person_id: None,
+                agent_id: agent,
+                speaker: "Someone",
+                kind: "chat",
+                body,
+                now,
+            })
+            .unwrap()
+            .id
+        };
+        said(Some("b2"), "own same second", 1000);
+        let cut = said(Some("b1"), "other same second", 1000);
+        said(None, "person same second", 1000);
+        said(Some("b2"), "own later", 1200);
+        let bodies =
+            |messages: Vec<Message>| messages.into_iter().map(|m| m.body).collect::<Vec<_>>();
+        // No cut: the arrival second is left out, except the caller's own lines from it (R14).
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, Some("b2"), None, 0, 50).unwrap()),
+            ["own same second", "own later"]
+        );
+        assert_eq!(
+            bodies(db.messages_oldest_after("hz-porch", 1000, Some("b2"), None, 0, 50).unwrap()),
+            ["own same second", "own later"]
+        );
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, None, None, 0, 50).unwrap()),
+            ["own later"]
+        );
+        // With a cut, the cut decides: the caller's own lines from before it stay hidden.
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, Some("b2"), Some(cut), 0, 50).unwrap()),
+            ["person same second", "own later"]
+        );
+    }
+
+    #[test]
     fn a_walk_in_reads_from_the_last_line_before_it_not_its_second() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
@@ -20599,16 +20660,16 @@ mod tests {
         let bodies =
             |messages: Vec<Message>| messages.into_iter().map(|m| m.body).collect::<Vec<_>>();
         assert_eq!(
-            bodies(db.messages_oldest_after("hz-porch", 1000, cut, 0, 50).unwrap()),
+            bodies(db.messages_oldest_after("hz-porch", 1000, None, cut, 0, 50).unwrap()),
             ["same second after", "later"]
         );
         assert_eq!(
-            bodies(db.messages_since_as("hz-porch", 1000, cut, 0, 50).unwrap()),
+            bodies(db.messages_since_as("hz-porch", 1000, None, cut, 0, 50).unwrap()),
             ["same second after", "later"]
         );
         // Without a cut it's the old read: nothing from the arrival second.
         assert_eq!(
-            bodies(db.messages_oldest_after("hz-porch", 1000, None, 0, 50).unwrap()),
+            bodies(db.messages_oldest_after("hz-porch", 1000, None, None, 0, 50).unwrap()),
             ["later"]
         );
 
@@ -20622,7 +20683,7 @@ mod tests {
         assert_eq!(db.arrival_cut("hz-porch", "b2", 2000).unwrap(), Some(new_cut));
         assert_eq!(db.arrival_cut("hz-porch", "b2", 1000).unwrap(), None);
         assert!(db
-            .messages_oldest_after("hz-porch", 2000, Some(new_cut), 0, 50)
+            .messages_oldest_after("hz-porch", 2000, None, Some(new_cut), 0, 50)
             .unwrap()
             .is_empty());
     }
