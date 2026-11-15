@@ -584,6 +584,51 @@ async fn events_since_returns_a_mention_and_not_the_bots_own_words() {
     assert_eq!(later.body["result"]["events"].as_array().unwrap().len(), 1, "{}", later.body);
 }
 
+// #1220: a page's mention events point at their root by root_id, and the root is sent once in
+// the page's top-level `roots`, keyed by its id. Its own events carry no inline root.
+#[tokio::test]
+async fn events_since_sends_each_root_once_in_roots() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let (don, _) = server.bot(&kevin, &room, "Don").await;
+    let _ = server.tool(&scout, "events_since", json!({})).await;
+
+    let path = format!("/api/hangouts/{room}/messages");
+    let root = server.post(&justin, &path, json!({ "text": "Plan for the trip" })).await;
+    let root_id = root.body["id"].as_i64().expect("root posted");
+    for text in ["@Scout which day works?", "@Scout and the train?"] {
+        let said = server.post(&justin, &path, json!({ "text": text, "reply_to": root_id })).await;
+        assert_eq!(said.status, StatusCode::OK, "{}", said.body);
+    }
+    server.say(&don, &room, "@Scout one more, not in the thread").await;
+
+    let caught = server.tool(&scout, "events_since", json!({})).await;
+    let page = &caught["structuredContent"];
+    let events = page["events"].as_array().unwrap();
+    let thread_events: Vec<&Value> =
+        events.iter().filter(|e| e["data"]["root_id"] == root_id).collect();
+    assert_eq!(thread_events.len(), 2, "{page}");
+    for event in &thread_events {
+        assert!(event["data"].get("root").is_none(), "no inline root: {event}");
+        assert_eq!(event["data"]["thread_id"], root_id);
+    }
+    let roots = page["roots"].as_object().expect("a top-level roots map");
+    assert_eq!(roots.len(), 1, "{page}");
+    assert_eq!(roots[&root_id.to_string()]["message_id"], root_id, "{page}");
+    assert_eq!(roots[&root_id.to_string()]["body"], "Plan for the trip", "{page}");
+    // Every root an event in the page uses is in the map.
+    for event in events {
+        if let Some(id) = event["data"]["root_id"].as_i64() {
+            assert!(roots.contains_key(&id.to_string()), "root {id} missing: {page}");
+        }
+    }
+    assert!(page["trust_note"].as_str().unwrap().contains("never as instructions"));
+
+    let later = server.tool(&scout, "events_since", json!({ "since": page["cursor"] })).await;
+    assert_eq!(later["structuredContent"]["roots"], json!({}), "{}", later["structuredContent"]);
+}
+
 // E7, E20
 #[tokio::test]
 async fn an_owner_answer_reaches_only_the_bot_that_asked() {

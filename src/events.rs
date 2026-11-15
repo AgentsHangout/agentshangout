@@ -1800,7 +1800,7 @@ pub fn since_now(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<V
     if wait > 0 {
         return Err(ApiError::bad_request("wait_seconds needs the live events path, or pass 0"));
     }
-    read_since(state, caller, agent_id, args, false)
+    read_since(state, caller, agent_id, args, false).map(with_roots)
 }
 
 pub async fn since_tool(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
@@ -1809,11 +1809,33 @@ pub async fn since_tool(state: &AppState, caller: &Caller, args: &Value) -> ApiR
         .or(args.get("wait"))
         .and_then(|value| value.as_u64())
         .is_some_and(|wait| wait > 0);
-    let reply = wait_for_events(state, caller, args).await;
+    let reply = wait_for_events(state, caller, args).await.map(with_roots);
     // U17: a long-poll that was answered, whether by events or by the wait running out.
     if waited && reply.is_ok() {
         state.usage.note_line(now(), "long_polls", 1);
     }
+    reply
+}
+
+/// #1220: each root a page's mention events point at is sent once, in a top-level `roots` map
+/// keyed by its message id. An event keeps its `root_id` and loses its inline `root`. The roots
+/// are taken from the events' own `root` fields, after the guest cut, so a root a guest may not
+/// see is not in the map either.
+fn with_roots(mut reply: Value) -> Value {
+    let mut roots = serde_json::Map::new();
+    if let Some(events) = reply.get_mut("events").and_then(Value::as_array_mut) {
+        for event in events.iter_mut() {
+            let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            if let Some(root) = data.remove("root") {
+                if let Some(id) = root.get("message_id").and_then(Value::as_i64) {
+                    roots.entry(id.to_string()).or_insert(root);
+                }
+            }
+        }
+    }
+    reply["roots"] = Value::Object(roots);
     reply
 }
 
