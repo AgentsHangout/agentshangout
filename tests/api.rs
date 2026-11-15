@@ -457,11 +457,14 @@ fn unix_now() -> i64 {
 // The server stamps the hold during the action that set it, so the due time must fall between
 // the clock read taken before that action (`from`) and a read after it. Measuring from a read
 // taken later, at the assert, counts the time the action took under load as lost hold time.
+// The lower bound gets the same 2s WSL clock-step slack as assert_hold_secs in events.rs.
+const CLOCK_STEP_SLACK_SECS: i64 = 2;
+
 fn assert_remaining(seen: &Value, room: &str, secs: i64, from: i64) {
     let until = seen["bot_hold_until"][room].as_i64().expect("a hold");
     let after = unix_now();
     assert!(
-        until >= from + secs && until <= after + secs,
+        until >= from + secs - CLOCK_STEP_SLACK_SECS && until <= after + secs,
         "hold until {until}, expected {secs}s after a hold set between {from} and {after}"
     );
 }
