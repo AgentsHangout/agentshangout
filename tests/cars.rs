@@ -376,3 +376,44 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
     assert_eq!(used["ok"], true, "{used}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.club.as_str()));
 }
+
+// CR13: where_is shows a driving bot as driving, with arrives_in. The destination is named only
+// when the caller can see that floor, and a bot seen on neither end is hidden as before.
+#[tokio::test]
+async fn where_is_shows_a_driving_bot_and_hides_only_the_floor_you_cant_see() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let made = json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE });
+    let made = server.send("", Method::POST, "/api/hangouts", Some(made)).await;
+    let (ann_home, ann_id) = (text(&made["hangout"]["id"]), text(&made["person"]["id"]));
+    let (_, fern) = support::legacy_bot(&server.state, &ann_id, &ann_home, "Fern");
+    let club_name = server.state.db.hangout(&town.club).unwrap().unwrap().name;
+    server.tool(&town.token, "go_to_room", json!({ "hangout_id": town.club })).await;
+    // The caller can see the room the drive starts from and the one it's headed to.
+    server.state.db.drive_of(&town.rover).unwrap().expect("a drive");
+
+    let seen = server.tool(&fern, "where_is", json!({ "name": "Rover" })).await;
+    assert_eq!(seen["here"], Value::Null, "{seen}");
+    assert_eq!(seen["driving"], json!({ "to": town.club, "name": club_name }), "{seen}");
+    assert!((1..=90).contains(&seen["arrives_in"].as_i64().unwrap()), "{seen}");
+
+    // Cy closes the club to Fern: the drive is still shown, but not where to.
+    let closed = json!({ "access": "private", "create_code": CODE });
+    let path = format!("/api/floors/{}", town.club);
+    server.send(&town.owner.key, Method::PUT, &path, Some(closed)).await;
+    let half = server.tool(&fern, "where_is", json!({ "name": "Rover" })).await;
+    assert_eq!(half["here"], Value::Null, "{half}");
+    assert_eq!(half["driving"], json!({}), "{half}");
+    assert!(half["arrives_in"].as_i64().unwrap() >= 1, "{half}");
+    assert!(!half.to_string().contains(&club_name), "{half}");
+
+    // Its cafe is closed to Fern too, so neither end is visible and Rover is hidden as before.
+    let cafe_closed = json!({ "access": "private", "create_code": CODE });
+    let path = format!("/api/floors/{}", town.cafe);
+    server.send(&town.owner.key, Method::PUT, &path, Some(cafe_closed)).await;
+    let hidden = server.tool(&fern, "where_is", json!({ "name": "Rover" })).await;
+    assert_eq!(hidden["here"], Value::Null, "{hidden}");
+    assert!(hidden.get("driving").is_none() && hidden.get("arrives_in").is_none(), "{hidden}");
+    assert_eq!(hidden["note"], "They're not somewhere you can see.", "{hidden}");
+    assert!(server.state.db.drive_of(&town.rover).unwrap().is_some());
+}

@@ -2166,6 +2166,12 @@ fn sighting(
     agent_id: Option<&str>,
     now: i64,
 ) -> ApiResult<Option<Value>> {
+    // CR13: a bot on the road is in neither room, so it's shown as driving, not where it left.
+    if let Some(agent_id) = agent_id {
+        if let Some(drive) = crate::travel::current_drive(state, agent_id, now)? {
+            return driving_sighting(state, caller, kind, name, owner_id, agent_id, &drive, now);
+        }
+    }
     let hangout_id = match agent_id {
         Some(id) => state.db.bot_place(id, now)?,
         None => state.presence.floor_of(owner_id, now),
@@ -2173,16 +2179,13 @@ fn sighting(
     let Some(hangout_id) = hangout_id else {
         return Ok(None);
     };
-    let Some(floor) = state.db.floor(&hangout_id)? else {
+    if !floor_seen(state, caller, owner_id, agent_id, &hangout_id, now)? {
         return Ok(None);
-    };
-    let public = floor.access == "public";
+    }
+    let public = state.db.floor(&hangout_id)?.is_some_and(|floor| floor.access == "public");
     let Some(hangout) = state.db.hangout(&hangout_id)? else {
         return Ok(None);
     };
-    if !public && !shared_floor(state, caller, owner_id, agent_id, &hangout_id, now)? {
-        return Ok(None);
-    }
     let mut body = json!({
         "name": name,
         "kind": kind,
@@ -2209,6 +2212,63 @@ fn sighting(
 
 /// S87: `where_is` says where, not what someone is doing, so missing activity doesn't read as idle.
 const WHERE_IS_ACTIVITY: &str = "not shown here; read_room there shows it";
+
+/// Whether this caller can see the floor: it's public, or they share it.
+fn floor_seen(
+    state: &AppState,
+    caller: &Caller,
+    owner_id: &str,
+    agent_id: Option<&str>,
+    hangout_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    let Some(floor) = state.db.floor(hangout_id)? else {
+        return Ok(false);
+    };
+    if floor.access == "public" {
+        return Ok(state.db.hangout(hangout_id)?.is_some());
+    }
+    shared_floor(state, caller, owner_id, agent_id, hangout_id, now)
+}
+
+/// CR13: a bot on the road is in neither room. It's seen if the caller can see the room it left
+/// or the room it's driving to. `driving` is always an object; `to` and `name` are only in it when
+/// the caller can see the destination floor, so a hidden destination shows only the drive.
+#[allow(clippy::too_many_arguments)]
+fn driving_sighting(
+    state: &AppState,
+    caller: &Caller,
+    kind: &'static str,
+    name: &str,
+    owner_id: &str,
+    agent_id: &str,
+    drive: &crate::db::Drive,
+    now: i64,
+) -> ApiResult<Option<Value>> {
+    let origin = state.db.bot_place(agent_id, now)?;
+    let origin_seen = match &origin {
+        Some(id) => floor_seen(state, caller, owner_id, Some(agent_id), id, now)?,
+        None => false,
+    };
+    let to_seen = floor_seen(state, caller, owner_id, Some(agent_id), &drive.hangout_id, now)?;
+    if !origin_seen && !to_seen {
+        return Ok(None);
+    }
+    let mut driving = json!({});
+    if to_seen {
+        if let Some(room) = state.db.hangout(&drive.hangout_id)? {
+            driving = json!({ "to": room.id, "name": room.name });
+        }
+    }
+    Ok(Some(json!({
+        "name": name,
+        "kind": kind,
+        "here": Value::Null,
+        "driving": driving,
+        "arrives_in": (drive.arrive_at - now).max(1),
+        "note": "On the road: in neither room until it arrives.",
+    })))
+}
 
 fn shared_floor(
     state: &AppState,

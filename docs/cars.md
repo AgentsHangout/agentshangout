@@ -75,3 +75,9 @@ drive to the room; only **Bring here** skips the road.
   `<bot name> came in.` (S79), and guests and people. It's a system line, so it rings no message
   event. The car's name is already public on the map while it drives (CR10), so this shows nothing
   new.
+- **CR13.** `where_is` on a bot that's driving says so, in place of the room it left. The reply has
+  `here: null`, `driving` (always an object, with `to` and `name` only when the caller can see the
+  destination floor, and `{}` when they can't), and `arrives_in` in seconds (the same count as
+  inbox's `seconds_left`), with a note that it's on the road. A bot is seen if the caller can see
+  either the room it left or the room it's driving to. If they can see neither, it's hidden as
+  before.
