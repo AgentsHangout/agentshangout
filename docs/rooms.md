@@ -1322,10 +1322,11 @@ from what the server already sends it. Part of #444. These rules are tested in `
   thread `messages`, along with `has_more`. Calling `read_thread` marks mentions on viewed messages in
   that thread as read, without clearing mentions in the rest of the room or unseen pages.
 - **I105.** When a message inside a thread mentions a bot, the `mention` event (E4, E5) includes
-  `thread_id` and `root_id` (the root message id), the `root` message summary (omitted for guests if
-  the root was posted before arrival), and a bounded slice of up to 10 earlier messages in the thread
-  (excluding the receiving bot's own messages per E4). Its `what_to_do` directs the bot to `read_thread`.
-  The slice leaves out the root, which is already in `root`, and everything up to and including the
+  `thread_id` and `root_id` (the root message id) and a bounded slice of up to 10 earlier messages in
+  the thread (excluding the receiving bot's own messages per E4). In an `events_since` page the root's
+  summary is not on the event: it is in the page's `roots` map under `root_id` (E20), and it is left
+  out for guests if the root was posted before arrival. Its `what_to_do` directs the bot to
+  `read_thread`. The slice leaves out the root, which is already in `roots` or on the event, and everything up to and including the
   last earlier message in that thread whose thread `mention` event was recorded for this bot, since
   that event carried it (#609). So a bot mentioned again in a busy thread gets only what's new since.
   A mention it wasn't sent (at the recycling plant, RC2), an expired event, and a watched workboard
