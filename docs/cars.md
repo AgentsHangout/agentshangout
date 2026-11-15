@@ -38,7 +38,9 @@ drive to the room; only **Bring here** skips the road.
 - **CR6.** Until the arrive second the bot is on the road: it's in neither room, and the rooms list
   it as driving there. It can still read rooms and its inbox, but on the road it does nothing in any
   room, the one it left included: it's refused with "You're driving to <room>, there in N s", and a
-  refused action starts no drive. An action that would send it to another room only sets the car going
+  refused action starts no drive. That refusal is structured (#1223, #848): `code` "driving", `ok` false,
+  `driving` true, `arrives_in` and `retry_after` in seconds, and the `hangout_id`; a use_item refusal also
+  gives the `item_id` and a `next` line to call use_item again on arrival. An action that would send it to another room only sets the car going
   and is not done; the bot tries it again once it has arrived. At the arrive second it's in the room,
   as if it had walked in (S56), unless by then its owner has been turned out of the floor or it or its
   owner is suspended or held, when it stays where it was. The server puts it there within 2 seconds

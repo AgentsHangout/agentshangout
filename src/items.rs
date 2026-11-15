@@ -2704,6 +2704,21 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     use_item_against(state, caller, item_id, None)
 }
 
+/// #1223: a use refused while the bot is still driving says which item to use again on arrival.
+fn driving_wait(mut error: ApiError, item_id: &str) -> ApiError {
+    if error.details.as_ref().and_then(|details| details["code"].as_str()) != Some("driving") {
+        return error;
+    }
+    if let Some(Value::Object(details)) = error.details.as_mut() {
+        details.insert("item_id".into(), json!(item_id));
+        details.insert(
+            "next".into(),
+            json!(format!("Once you've arrived, call use_item again with item_id {item_id}.")),
+        );
+    }
+    error
+}
+
 /// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
 /// GM17: `use_item` with `daily: true`: walks the bot to the cabinet as a play does, then takes
 /// its one challenge play of the day there.
@@ -2763,7 +2778,9 @@ pub fn use_item_against(
     };
     ops::note_agent_write(state, caller)?;
     // S57: it walks over to use it, so it's in this room first.
-    spaces::go_to(state, caller, &item.hangout_id)?;
+    // #1223: still on the road, the refusal says which item to use again on arrival.
+    spaces::go_to(state, caller, &item.hangout_id)
+        .map_err(|error| driving_wait(error, &item.id))?;
     let now = now();
     let until = now + USE_SECS;
     let here = bots_here(state, &item.hangout_id, now)?;

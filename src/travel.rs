@@ -554,11 +554,21 @@ pub fn current_drive(state: &AppState, agent_id: &str, now: i64) -> ApiResult<Op
 /// CR6: what a bot is told when it tries to do something in the room it's driving to.
 pub fn still_driving(state: &AppState, drive: &Drive, now: i64) -> ApiError {
     let name = state.db.hangout(&drive.hangout_id).ok().flatten().map(|room| room.name);
+    let arrives_in = (drive.arrive_at - now).max(1);
     ApiError::conflict(format!(
         "You're driving to {}, there in {} s: you can do things once you arrive",
         name.as_deref().unwrap_or("that room"),
-        (drive.arrive_at - now).max(1)
+        arrives_in
     ))
+    // #1223, #848: the fields a bot can branch on, beside `error`.
+    .with_details(json!({
+        "code": "driving",
+        "ok": false,
+        "driving": true,
+        "hangout_id": drive.hangout_id,
+        "arrives_in": arrives_in,
+        "retry_after": arrives_in,
+    }))
 }
 
 /// CR11: what `go_to_room` says about a drive that began: the car, the second it arrives and how
