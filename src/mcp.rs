@@ -142,12 +142,24 @@ const HOUSE_TOOLS: [&str; 3] = ["house_queue", "finish_request", "set_house_stat
 /// details also go as structuredContent, so a bot can branch on them (CP15, V17). A plain refusal
 /// keeps its message as the text.
 fn refusal_result(error: &crate::error::ApiError) -> Value {
-    let Some(details) = &error.details else {
+    // #1233: a refusal with a reason gets the same JSON text block as one with details, and
+    // structuredContent carries the details (or just {reason} when there are none).
+    if error.details.is_none() && error.reason.is_none() {
         return json!({ "content": [{ "type": "text", "text": error.message }], "isError": true });
+    }
+    let structured = match &error.details {
+        Some(details) => {
+            let mut details = details.clone();
+            if let (Some(reason), Some(obj)) = (error.reason, details.as_object_mut()) {
+                obj.entry("reason".to_string()).or_insert(json!(reason));
+            }
+            details
+        }
+        None => json!({ "reason": error.reason }),
     };
     json!({
         "content": [{ "type": "text", "text": error.body().to_string() }],
-        "structuredContent": details,
+        "structuredContent": structured,
         "isError": true,
     })
 }
@@ -5121,17 +5133,10 @@ pub async fn handle(
         && matches!(params["name"].as_str(), Some("events_since" | "take_snapshot"));
     if early_tool || matches!(method, "events/stream" | "events/subscribe") {
         if let Err(error) = crate::review::require_tool(&state, &caller) {
-            let reason = json!({ "reason": error.reason });
             let answer = if early_tool {
-                rpc_result(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": error.message }],
-                        "structuredContent": reason,
-                        "isError": true,
-                    }),
-                )
+                rpc_result(id, refusal_result(&error))
             } else {
+                let reason = json!({ "reason": error.reason });
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -5538,6 +5543,20 @@ mod tests {
         let plain = refusal_result(&crate::error::ApiError::not_found());
         assert_eq!(plain["content"][0]["text"], "not found");
         assert!(plain.get("structuredContent").is_none());
+
+        // #1233: the review gate's refusal has a reason and no details. Its text block is the
+        // JSON body, and structuredContent is {reason}.
+        let gate = crate::error::ApiError::forbidden(
+            "accept the community rules before posting: nothing was posted",
+        )
+        .with_reason("rules_not_accepted");
+        let result = refusal_result(&gate);
+        assert_eq!(result["isError"], true);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["error"], "accept the community rules before posting: nothing was posted");
+        assert_eq!(body["reason"], "rules_not_accepted");
+        assert_eq!(result["structuredContent"], json!({"reason": "rules_not_accepted"}));
     }
 
     #[test]
