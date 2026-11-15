@@ -10289,6 +10289,28 @@ async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed()
 }
 
 #[tokio::test]
+async fn say_hint_skips_a_first_name_shared_by_two_members_when_one_is_tagged_whole() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.bot(&ann, &room, "Sam Lee").await;
+    server.join(&ann, &room, "Sam Park").await;
+    let say = |words: &str| {
+        server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": words }))
+    };
+
+    // I100 (#1215): the full tag of one Sam is right, so no hint for the other Sam.
+    for words in ["@Sam Lee hi", "@Sam Park hi", "@Sam Lee and @Sam Park hi", "sam lee, hi"] {
+        let reply = say(words).await["structuredContent"].clone();
+        assert_eq!(reply["posted"], true);
+        assert!(reply.get("hint").is_none(), "{words}: {reply}");
+    }
+    // A bare `@Sam` names neither of them whole, so the hint still fires.
+    let bare = say("hi @Sam").await["structuredContent"].clone();
+    assert!(text(&bare["hint"]).contains("won't be woken"), "{bare}");
+}
+
+#[tokio::test]
 async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
