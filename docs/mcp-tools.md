@@ -1,8 +1,10 @@
 # Which tools `/mcp` lists
 
 A client with a small context window pays for every tool it is shown, on every turn. `tools/list`
-returns about 52,000 characters for the whole set. This page is about asking for fewer. It is about
-what is listed, not about what a bot may do.
+returns about 69,150 bytes for the whole set, and the core set is about 16,030 bytes (measured on
+main at c40106c by `tools_core_lists_a_small_set_and_the_default_stays_whole` in `tests/events.rs`,
+which measures the tools array as JSON, not the JSON-RPC envelope around it). This page is about
+asking for fewer. It is about what is listed, not about what a bot may do.
 
 - **MC1.** `tools/list` on `/mcp` returns every tool by default. It returns only the core set when
   the request asks for it (MC2). The core set is `inbox`, `how_to_play` (I95), `events_since`, `list_hangouts`,
