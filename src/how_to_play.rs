@@ -216,7 +216,8 @@ pub fn how(present: &[&str]) -> Value {
 /// posts in.
 pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) -> Option<String> {
     let text = &without_links(text);
-    for name in names {
+    let names: Vec<&String> = names.collect();
+    for name in &names {
         if crate::doorbell::mentions(text, name) {
             continue;
         }
@@ -224,6 +225,15 @@ pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) ->
         else {
             continue;
         };
+        // Another member shares this first word and the text already names one of them, so the
+        // tag is for that member (`@Sam Lee` when Sam Park is here too), not a short form of this one.
+        let shared_first = names.iter().any(|other| {
+            other.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case(first))
+                && crate::doorbell::mentions(text, other)
+        });
+        if shared_first {
+            continue;
+        }
         if first.chars().count() >= 3 && tagged(text, first) {
             return Some(format!(
                 "you wrote {first} but their name is {name}, so they won't be woken; write @{name}"
