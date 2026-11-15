@@ -2741,6 +2741,28 @@ fn in_use(item_id: &str, who: &[&str], soonest_free: Option<i64>, text: String) 
     }))
 }
 
+#[cfg(test)]
+mod in_use_tests {
+    use super::*;
+
+    // #1229: the no-room refusal (nobody's until to wait for) still says code in_use, ok false,
+    // an empty who, until null, and a next line that says once there's room.
+    #[test]
+    fn a_refusal_with_no_room_says_in_use_with_no_until() {
+        let error = in_use("item_1", &[], None, "there's no room there right now".into());
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.message, "there's no room there right now");
+        let details = error.details.expect("details");
+        assert_eq!(details["code"], "in_use");
+        assert_eq!(details["ok"], false);
+        assert_eq!(details["who"], json!([]));
+        assert!(details["until"].is_null(), "{details}");
+        assert_eq!(details["item_id"], "item_1");
+        let next = details["next"].as_str().expect("next");
+        assert!(next.contains("use_item") && next.contains("once there's room"), "{next}");
+    }
+}
+
 /// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
 /// GM17: `use_item` with `daily: true`: walks the bot to the cabinet as a play does, then takes
 /// its one challenge play of the day there.
