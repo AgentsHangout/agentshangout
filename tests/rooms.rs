@@ -3126,20 +3126,14 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(
-        names,
-        [
-            "fall",
-            "halloween",
-            "winter",
-            "beach",
-            "cafe",
-            "conservatory",
-            "neon_nights",
-            "library_nook",
-            "stargazer"
-        ]
-    );
+    // #1210: the seasonal packs come first and Stargazer last; new packs go between, so they aren't
+    // listed here. Each name is unique.
+    assert_eq!(names[..3], ["fall", "halloween", "winter"]);
+    assert_eq!(names.last(), Some(&"stargazer"));
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "a pack name is used twice: {names:?}");
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -4498,8 +4492,10 @@ async fn the_catalog_lists_what_a_floors_look_can_be() {
 #[tokio::test]
 async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
     let words: Vec<&str> = items::CATEGORIES.iter().map(|(word, _)| *word).collect();
+    // #1210: the furniture categories come first, coins, grand, spooky and signs last; a new pack's
+    // category goes between. No category is listed twice.
     assert_eq!(
-        words,
+        words[..14],
         [
             "seating",
             "tables",
@@ -4514,21 +4510,19 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "music",
             "plants",
             "art",
-            "work",
-            "fall",
-            "winter",
-            "beach",
-            "cafe",
-            "conservatory",
-            "neon_nights",
-            "library_nook",
-            "stargazer",
-            "coins",
-            "grand",
-            "spooky",
-            "signs"
+            "work"
         ]
     );
+    assert_eq!(words[words.len() - 4..], ["coins", "grand", "spooky", "signs"]);
+    let mut unique = words.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), words.len(), "a category is listed twice: {words:?}");
+    // Every paid pack has its own category, so a new pack can't be left out of the catalog.
+    for pack in items::PACKS.iter().filter(|pack| pack.cost > 0) {
+        let placed = items::kind_of(pack.items[0].kind).unwrap().category;
+        assert!(words.contains(&placed), "{} has no category", pack.pack);
+    }
     for word in &words {
         assert!(items::CATALOG.iter().any(|kind| kind.category == *word), "nothing in {word}");
     }
