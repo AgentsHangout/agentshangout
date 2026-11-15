@@ -21638,43 +21638,14 @@ mod tests {
             assert_eq!(kind_of(kind).unwrap().category, "coins", "{kind}");
             assert!((2..=10).contains(&piece_price(kind).unwrap()), "{kind}");
         }
-        // Each price is piece_price's, from size and beauty: the satellite (beauty 4) is 3 and the
-        // snowball pile (beauty 2) is 2, though both are 1x1.
-        let prices: Vec<i64> = [
-            "snow_globe",
-            "cocoa_cart",
-            "ice_rink",
-            "ufo",
-            "planetarium",
-            "satellite",
-            "igloo",
-            "reindeer",
-            "snowball_pile",
-            "crab",
-            "bottle_message",
-            "lifeguard_tower",
-            "latte_art",
-            "barista_cat",
-            "coffee_roaster",
-            "fortune_machine",
-            "photo_booth",
-            "wishing_well",
-            "venus_flytrap",
-            "bonsai",
-            "lemon_tree",
-            "disco_ball",
-            "glowstick_jar",
-            "retro_cabinet",
-            "owl_statue",
-            "hourglass",
-            "typewriter",
-        ]
-        .iter()
-        .map(|k| piece_price(k).unwrap())
-        .collect();
+        // #1210: the loop above holds every SOLD_ALONE price to 2..=10, so a new coin piece needs no
+        // list here. Two known prices stay as examples of piece_price: the satellite (beauty 4) is 3
+        // and the snowball pile (beauty 2) is 2, though both are 1x1.
+        assert_eq!(piece_price("satellite"), Some(3));
+        assert_eq!(piece_price("snowball_pile"), Some(2));
         assert_eq!(
-            prices,
-            [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6, 3, 3, 6, 4, 4, 6, 3, 3, 6, 3, 2, 4, 3, 2, 3]
+            ["snow_globe", "cocoa_cart", "ice_rink"].map(|k| piece_price(k).unwrap()),
+            [2, 4, 10]
         );
 
         let db = Db::open(":memory:").unwrap();
@@ -21714,7 +21685,7 @@ mod tests {
         use crate::items::{
             grand_price, kind_of, paid_pack_with, piece_price, GRAND_PIECES, PIECE,
         };
-        for (kind, price) in GRAND_PIECES {
+        for &(kind, price) in GRAND_PIECES {
             assert!((100..=500).contains(&price), "{kind}");
             assert_eq!(grand_price(kind), Some(price));
             assert_eq!(piece_price(kind), None, "piece_price priced the grand {kind}");

@@ -146,7 +146,7 @@ const SIGNS: &str = "signs";
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 26] = [
+pub const CATEGORIES: &[(&str, &str)] = &[
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -266,7 +266,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 234] = [
+pub static CATALOG: &[Kind] = &[
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -604,7 +604,7 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 9] = [
+pub const PACKS: &[Pack] = &[
     Pack {
         pack: "fall",
         paint: "harvest",
@@ -894,7 +894,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 30] = [
+pub const SOLD_ALONE: &[(&str, &str)] = &[
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -932,8 +932,8 @@ pub const SOLD_ALONE: [(&str, &str); 30] = [
 
 /// HC65: grand pieces and their prices, 100 to 500. These are bought only on their own, as
 /// `piece:<kind>`, once per person, and no pack gives one. Their price is set here and only here.
-pub const GRAND_PIECES: [(&str, i64); 4] =
-    [("koi_pond", 150), ("grand_piano", 250), ("dragon_statue", 400), ("carousel", 500)];
+pub const GRAND_PIECES: &[(&str, i64)] =
+    &[("koi_pond", 150), ("grand_piano", 250), ("dragon_statue", 400), ("carousel", 500)];
 
 /// HC65: what a grand piece costs, if `word` is one.
 pub fn grand_price(word: &str) -> Option<i64> {
@@ -2976,7 +2976,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
         }).collect::<Vec<_>>(),
         // I90: discovery filters only; the ordinary catalog remains authoritative.
         "collections": [
-            { "id":"discovery", "label":"Discovery & evidence", "description":"Observe, compare and share findings.", "items":discovery_collection_items(&CATALOG) },
+            { "id":"discovery", "label":"Discovery & evidence", "description":"Observe, compare and share findings.", "items":discovery_collection_items(CATALOG) },
             { "id":"welcome", "label":"Welcome & recharge", "description":"A comfortable place to meet and take a break.", "items":["armchair","bench","coffee_table","lamp","plant","coffee_machine"] },
             { "id":"together", "label":"Work together", "description":"Make room for shared ideas and making things.", "items":["whiteboard","workbench","computer","monitor","standing_desk","research_display","bookshelf"] },
         ],

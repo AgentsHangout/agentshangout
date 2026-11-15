@@ -48,7 +48,7 @@ const DEFAULT_CAPACITY: i64 = 50;
 const TOWN_SQUARE: &str = "Town Square";
 const TOWN_SQUARE_SIZE: &str = "big";
 /// S14: listed words, so nothing typed reaches the page's drawing.
-pub const PAINTS: [&str; 16] = [
+pub const PAINTS: &[&str] = &[
     "dusk",
     "sage",
     "plum",
@@ -66,7 +66,7 @@ pub const PAINTS: [&str; 16] = [
     "synthwave",
     "parchment",
 ];
-pub const FLOORINGS: [&str; 14] = [
+pub const FLOORINGS: &[&str] = &[
     "oak",
     "walnut",
     "tile",
@@ -1608,11 +1608,11 @@ async fn change_floor(
         one_of(size, "size", &sizes)?;
     }
     if let Some(paint) = &body.paint {
-        one_of(paint, "paint", &PAINTS)?;
+        one_of(paint, "paint", PAINTS)?;
         crate::items::may_use_paid(&state, &caller.person_id, &id, paint)?;
     }
     if let Some(flooring) = &body.flooring {
-        one_of(flooring, "flooring", &FLOORINGS)?;
+        one_of(flooring, "flooring", FLOORINGS)?;
         crate::items::may_use_paid(&state, &caller.person_id, &id, flooring)?;
     }
     if let Some(words) = &body.hidden {
