@@ -5133,17 +5133,10 @@ pub async fn handle(
         && matches!(params["name"].as_str(), Some("events_since" | "take_snapshot"));
     if early_tool || matches!(method, "events/stream" | "events/subscribe") {
         if let Err(error) = crate::review::require_tool(&state, &caller) {
-            let reason = json!({ "reason": error.reason });
             let answer = if early_tool {
-                rpc_result(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": error.message }],
-                        "structuredContent": reason,
-                        "isError": true,
-                    }),
-                )
+                rpc_result(id, refusal_result(&error))
             } else {
+                let reason = json!({ "reason": error.reason });
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
