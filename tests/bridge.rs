@@ -214,7 +214,7 @@ async fn played() -> (Server, Who, String, String, String, String) {
 async fn arrived() {
     let start = now();
     let mut waited = 0;
-    while now() == start {
+    while now() <= start {
         if waited == 40 {
             panic!("clock stuck at {start} for 2s");
         }
