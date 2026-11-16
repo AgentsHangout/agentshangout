@@ -9588,7 +9588,7 @@ function createPanels(root) {
         panel.tab.tabIndex = panel === active ? 0 : -1;
         panel.allocated = { ...rect, y: rect.y + tabHeight, h: Math.max(1, rect.h - tabHeight) };
         // M12 (#835): a window docked in a phone zone lifts its composer too, not only a floating one.
-        place(panel.el, panel === maximized ? area : liftAboveKeyboard(panel, panel.allocated, area));
+        place(panel.el, liftAboveKeyboard(panel, panel === maximized ? area : panel.allocated, area));
       }
     }
     for (const [name, panel] of panels) {
