@@ -9,13 +9,14 @@ const code = app.slice(start, app.indexOf('\n}\n', start) + 3);
 
 const listeners = (target) => { target.on = {}; target.addEventListener = (name, fn) => { (target.on[name] ||= []).push(fn); }; return target; };
 const classes = new Set(['apple-hig']);
-const root = { classList: { contains: (c) => classes.has(c), toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) }, style: { vars: {}, setProperty(k, v) { this.vars[k] = v; } } };
+const events = [];
+const root = { classList: { contains: (c) => classes.has(c), toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) }, style: { vars: {}, setProperty(k, v) { this.vars[k] = v; } }, dispatchEvent: (e) => events.push(e.type) };
 const inChat = { closest: (sel) => (sel === '.chat-form' ? {} : null) };
 const elsewhere = { closest: () => null };
 const document = listeners({ activeElement: elsewhere });
 const view = listeners({ height: 852, offsetTop: 0 });
 const timers = [];
-const context = { document, window: { innerHeight: 852, visualViewport: view }, setTimeout: (fn) => timers.push(fn) };
+const context = { document, window: { innerHeight: 852, visualViewport: view }, setTimeout: (fn) => timers.push(fn), Event: class { constructor(type) { this.type = type; } } };
 vm.createContext(context);
 vm.runInContext(`${code}\nthis.dockComposer = dockComposer;`, context);
 context.dockComposer(root, view);
@@ -29,6 +30,8 @@ document.on.focusin.forEach((fn) => fn());
 view.on.resize.forEach((fn) => fn());
 assert.ok(classes.has('typing'), 'typing hides the tabs');
 assert.equal(root.style.vars['--keyboard'], '340px', 'the sheet ends where the keyboard starts');
+// M12 (#835): createPanels lays its floating windows out again on this event, so a window moves with the keyboard.
+assert.ok(events.includes('composerdock'), 'the keyboard change tells the windows to lay out');
 
 // With the page itself shrunk for the keyboard there's nothing to lift.
 context.window.innerHeight = 512;
@@ -42,6 +45,9 @@ document.on.focusout.forEach((fn) => fn());
 timers.splice(0).forEach((fn) => fn());
 assert.ok(!classes.has('typing'));
 assert.equal(root.style.vars['--keyboard'], '0px');
+events.length = 0;
+view.on.resize.forEach((fn) => fn());
+assert.ok(events.includes('composerdock'), 'a window drops back on the same event');
 
 // On a desktop nothing changes, even in a chat box.
 classes.delete('apple-hig');
