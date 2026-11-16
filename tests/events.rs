@@ -816,7 +816,14 @@ async fn a_poll_drops_a_row_older_than_max_age() {
         .await;
     let cursor = polled.body["result"]["cursor"].as_str().unwrap().to_string();
     server.say(&kevin, &room, "old news").await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // The age floor counts whole seconds, so wait for the clock to pass the message's second by 2.
+    let posted = now();
+    let mut waited = 0;
+    while now() < posted + 2 {
+        assert!(waited < 100, "clock still at {} after 5s, posted {posted}", now());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waited += 1;
+    }
     let aged = server
         .mcp(
             &scout,
