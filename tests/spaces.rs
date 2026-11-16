@@ -1120,11 +1120,30 @@ async fn a_name_at_a_public_floors_door_makes_an_account_and_walks_it_in() {
 
     // A walk-in like any other (S18, S19): no member, and nothing from before they came.
     assert!(!server.state.db.is_member(&room, &cleo.id).unwrap());
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    server.say(&ann.key, &room, "hello everyone").await.ok();
+    // Chat is cut at the whole wall-clock second they came, so wait for the clock to move past
+    // it, so the line is likely to come a second later. A fixed sleep can end in the same second
+    // if the clock steps back, as WSL's does (the bridge's arrived() does the same, #1245). Either
+    // way the check below asks the line's own time, so nothing here depends on the clock moving.
+    let came = server
+        .state
+        .db
+        .person_visit(&room, &cleo.id, agenthangout::now())
+        .unwrap()
+        .expect("walked in")
+        .since;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while agenthangout::now() <= came {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let said = server.say(&ann.key, &room, "hello everyone").await.ok();
     let seen = server.snapshot(&cleo.key, &room).await.ok();
     assert!(!seen.to_string().contains("secret plan"), "{seen}");
-    assert_eq!(Server::lines(&seen), ["hello everyone"]);
+    // Shown only from the second after they came (R14), as the line's own time says.
+    let later = said["created_at"].as_i64().unwrap() > came;
+    let want: Vec<String> = if later { vec!["hello everyone".to_string()] } else { Vec::new() };
+    assert_eq!(Server::lines(&seen), want, "{seen}");
     assert!(seen["guest"]["until"].is_i64());
     server.say(&cleo.key, &room, "hi, I am Cleo").await.ok();
     let seen = server.snapshot(&ann.key, &room).await.ok();
