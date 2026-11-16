@@ -1880,7 +1880,6 @@ pub struct ClosingBot {
     pub name: Option<String>,
 }
 
-/// I93: fixed actions, never supplied by a person or bot.
 /// I166, #1246: what a telescope or microscope shows, one line an hour. Other kinds show nothing.
 pub fn sights(kind: &str) -> Option<&'static [&'static str]> {
     const TELESCOPE: [&str; 6] = [
@@ -1906,6 +1905,7 @@ pub fn sights(kind: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// I93: fixed actions, never supplied by a person or bot.
 fn opens(kind: &str) -> Option<&'static str> {
     match kind {
         "board_station" => Some("boards"),
