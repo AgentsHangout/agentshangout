@@ -5991,6 +5991,7 @@ const USES = {
   // #837: two sleepers, the bottom bunk and then the top one, which sits higher.
   bunk_bed: { spots: 2, pose: 'sleep', on: true, bunks: [0, -22] },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
+  guitar: { spots: 1, pose: 'stand', hands: true, busy: paintNotes },
   arcade_cabinet: { spots: 1, pose: 'stand', hands: true },
   billiards: { spots: 2, pose: 'stand', hands: true },
   easel: { spots: 1, pose: 'stand', hands: true },

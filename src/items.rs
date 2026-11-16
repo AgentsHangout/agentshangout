@@ -345,7 +345,8 @@ pub static CATALOG: &[Kind] = &[
     piece("pinball", "Pinball machine", GAMES, THREE_FRIENDS, 5, feels("playful"), (2, 2)),
     piece("billiards", "Billiards table", GAMES, THREE_FRIENDS, 6, feels("playful"), (6, 3))
         .used("playing billiards", 2),
-    piece("guitar", "Guitar", MUSIC, ONE_FRIEND, 3, feels("inspired"), (1, 1)),
+    piece("guitar", "Guitar", MUSIC, ONE_FRIEND, 3, feels("inspired"), (1, 1))
+        .used("playing the guitar", 1),
     piece("piano", "Piano", MUSIC, THREE_FRIENDS, 8, feels("inspired"), (5, 2))
         .used("playing the piano", 1),
     piece("drum_kit", "Drum kit", MUSIC, THREE_FRIENDS, 5, feels("playful"), (3, 3)),
