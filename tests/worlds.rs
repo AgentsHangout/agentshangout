@@ -2908,6 +2908,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
 async fn a_crawler_fetching_a_page_is_shown_as_a_frog_on_a_road() {
     let server = Server::start().await;
     server.view(COMMONS).await;
+    let before = now();
     assert_eq!(server.get("/").ua(GOOGLEBOT).send().await.status, StatusCode::OK);
     let view = server.fresh_view(COMMONS).await;
     let frogs = view["crawlers"].as_array().unwrap();
@@ -2916,7 +2917,7 @@ async fn a_crawler_fetching_a_page_is_shown_as_a_frog_on_a_road() {
     assert_eq!(frog.len(), 5, "kind, name, x, y and how many seconds ago");
     assert_eq!(frog[0], "googlebot");
     assert_eq!(frog[1], "Googlebot");
-    assert!(frog[4].as_i64().unwrap() <= 3, "just seen");
+    assert!(frog[4].as_i64().unwrap() <= now() - before + 1, "just seen");
     let roads = world::Roads::from_tiles(&server.tiles(COMMONS));
     let step = view["step"].as_u64().unwrap();
     let (x, y) = world::crawler_position("googlebot", step, &roads).unwrap();
