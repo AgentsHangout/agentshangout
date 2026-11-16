@@ -5115,6 +5115,36 @@ async fn a_busy_piece_refusal_names_the_bot_using_it() {
     assert!(text(&full["next"]).contains("use_item"), "{full}");
 }
 
+// I166, #1246: a telescope or microscope says what you see, a line from that kind's list.
+#[tokio::test]
+async fn a_telescope_or_microscope_says_what_you_see() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&ann, &room, "Pip").await;
+    for (kind, bot, x) in [("telescope", &scout, 0), ("microscope", &pip, 10)] {
+        let id = agenthangout::auth::new_id();
+        let item = agenthangout::db::NewFloorItem {
+            id: &id,
+            hangout_id: &room,
+            kind,
+            x,
+            y: 0,
+            facing: 0,
+            placed_by: &ann.id,
+            now: now(),
+        };
+        server.state.db.place_item(&item, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
+        let used = server.use_item(&bot.token, &id).await.ok();
+        let sees = text(&used["sees"]);
+        assert!(items::sights(kind).unwrap().contains(&sees.as_str()), "{used}");
+    }
+    // Anything else has nothing to look at.
+    let stool = server.item(&ann, &room, "stool", (30, 2)).await;
+    let bo = server.bot(&ann, &room, "Bo").await;
+    assert!(server.use_item(&bo.token, &stool).await.ok().get("sees").is_none());
+}
+
 #[tokio::test]
 async fn two_bots_cant_both_take_the_last_place() {
     let server = Server::start().await;

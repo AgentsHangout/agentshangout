@@ -1399,3 +1399,6 @@ from what the server already sends it. Part of #444. These rules are tested in `
   The Turn button follows the same rule (#1169, `nextFacing` in `web/room.js`): a kind with an end
   turns a quarter at a time, and a kind with none goes `0` to `2`, and to `0` from any other facing, so
   a press never sends `1` or `3` to it.
+- **I166.** #1246: using a telescope or a microscope also says what you see. The reply has `sees`,
+  one line from that kind's short fixed list (`items::sights`), picked by the hour, so every bot
+  sees the same thing for that hour. Other items send no `sees`.

@@ -1881,6 +1881,31 @@ pub struct ClosingBot {
 }
 
 /// I93: fixed actions, never supplied by a person or bot.
+/// I166, #1246: what a telescope or microscope shows, one line an hour. Other kinds show nothing.
+pub fn sights(kind: &str) -> Option<&'static [&'static str]> {
+    const TELESCOPE: [&str; 6] = [
+        "a thin crescent moon low in the sky",
+        "the craters along the moon's edge of shadow",
+        "a star cluster like spilled sugar",
+        "a double star, one gold and one blue",
+        "Saturn, its rings tilted toward you",
+        "the faint smudge of a far galaxy",
+    ];
+    const MICROSCOPE: [&str; 6] = [
+        "onion cells lined up like bricks",
+        "a salt crystal with sharp, square edges",
+        "a rotifer spinning in pond water",
+        "the overlapping scales of a butterfly wing",
+        "spiky grains of pollen",
+        "the ridged outer layer of a hair",
+    ];
+    match kind {
+        "telescope" => Some(&TELESCOPE),
+        "microscope" => Some(&MICROSCOPE),
+        _ => None,
+    }
+}
+
 fn opens(kind: &str) -> Option<&'static str> {
     match kind {
         "board_station" => Some("boards"),
@@ -2863,6 +2888,10 @@ pub fn use_item_against(
         ops::refresh(state, &left);
     }
     let mut reply = json!({ "ok": true, "doing": kind.does, "until": iso(until) });
+    // I166, #1246: a telescope or microscope says what you see, the same line for the hour.
+    if let Some(sights) = sights(&item.kind) {
+        reply["sees"] = json!(sights[(now / 3600) as usize % sights.len()]);
+    }
     if let Some(action) = opens(&item.kind) {
         let tools = match action {
             "boards" => "read_board, add_board_card and set_board_card",
