@@ -2877,6 +2877,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   padding-bottom: 8px !important;
   max-height: calc(100dvh - var(--keyboard, 0px) - max(12px, env(safe-area-inset-top))) !important;
 }
+/* The movable-window rule (W114, further down) makes every window absolute with inset: auto, and it
+   comes later at the same specificity, so it would undo the dock above. Repeat the dock with one more class.
+   dockComposer also lifts the panel's inline top, which the window code sets with !important. */
+.apple-hig.typing.window-desktop > .game-panel {
+  position: fixed !important;
+  bottom: var(--keyboard, 0px) !important;
+}
 
 .apple-hig > .game-panel {
   position: fixed !important;

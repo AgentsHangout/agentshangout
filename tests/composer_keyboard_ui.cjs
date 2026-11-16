@@ -10,7 +10,10 @@ const code = app.slice(start, app.indexOf('\n}\n', start) + 3);
 const listeners = (target) => { target.on = {}; target.addEventListener = (name, fn) => { (target.on[name] ||= []).push(fn); }; return target; };
 const classes = new Set(['apple-hig']);
 const root = { classList: { contains: (c) => classes.has(c), toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) }, style: { vars: {}, setProperty(k, v) { this.vars[k] = v; } } };
-const inChat = { closest: (sel) => (sel === '.chat-form' ? {} : null) };
+// The room's panel, pinned by the window code with an inline top !important (W114).
+const styleOf = (init) => { const vals = { ...init }, pri = {}; return { vals, pri, getPropertyValue: (k) => vals[k] ?? '', getPropertyPriority: (k) => pri[k] ?? '', setProperty(k, v, p = '') { vals[k] = v; pri[k] = p; }, removeProperty(k) { delete vals[k]; delete pri[k]; } }; };
+const roomPanel = { style: styleOf({ top: '550px' }) };
+const inChat = { closest: (sel) => (sel === '.chat-form' ? {} : sel === '.game-panel' ? roomPanel : null) };
 const elsewhere = { closest: () => null };
 const document = listeners({ activeElement: elsewhere });
 const view = listeners({ height: 852, offsetTop: 0 });
@@ -29,6 +32,8 @@ document.on.focusin.forEach((fn) => fn());
 view.on.resize.forEach((fn) => fn());
 assert.ok(classes.has('typing'), 'typing hides the tabs');
 assert.equal(root.style.vars['--keyboard'], '340px', 'the sheet ends where the keyboard starts');
+// The pinned top gives way, so the CSS dock (bottom: --keyboard) is what places the panel.
+assert.deepEqual([roomPanel.style.vals.top, roomPanel.style.pri.top], ['auto', 'important'], 'the pinned top is lifted');
 
 // With the page itself shrunk for the keyboard there's nothing to lift.
 context.window.innerHeight = 512;
@@ -42,6 +47,7 @@ document.on.focusout.forEach((fn) => fn());
 timers.splice(0).forEach((fn) => fn());
 assert.ok(!classes.has('typing'));
 assert.equal(root.style.vars['--keyboard'], '0px');
+assert.deepEqual([roomPanel.style.vals.top, roomPanel.style.pri.top], ['550px', ''], 'the window keeps its place');
 
 // On a desktop nothing changes, even in a chat box.
 classes.delete('apple-hig');

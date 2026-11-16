@@ -9061,12 +9061,25 @@ function watchPhoneChrome(root) {
 // The bottom tabs step aside, and the open sheet ends where the keyboard starts, whether the
 // browser shrinks the page for the keyboard or only the visual viewport.
 function dockComposer(root, view = window.visualViewport) {
+  // The window code pins each panel with an inline top (!important), which beats the stylesheet. While
+  // the chat box has focus the docked panel gives that top back, and gets it again when the box is left.
+  let lifted = null;
   const sync = () => {
     const typing = root.classList.contains('apple-hig')
       && Boolean(document.activeElement?.closest?.('.chat-form'));
     root.classList.toggle('typing', typing);
     const keyboard = typing && view ? Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop)) : 0;
     root.style.setProperty('--keyboard', `${keyboard}px`);
+    const panel = typing ? document.activeElement.closest('.game-panel') : null;
+    if (lifted && lifted.panel !== panel) {
+      if (lifted.top) lifted.panel.style.setProperty('top', lifted.top, lifted.priority);
+      else lifted.panel.style.removeProperty('top');
+      lifted = null;
+    }
+    if (panel && !lifted) {
+      lifted = { panel, top: panel.style.getPropertyValue('top'), priority: panel.style.getPropertyPriority('top') };
+      panel.style.setProperty('top', 'auto', 'important');
+    }
   };
   document.addEventListener('focusin', sync);
   // Focus moves after focusout, so look once it has landed.
