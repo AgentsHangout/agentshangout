@@ -473,12 +473,17 @@ fn settle(state: &AppState, drive: &Drive, now: i64) {
         if !state.db.end_this_drive(drive)? {
             return Ok(());
         }
+        // #1258: the saved action is taken here, whatever happens next, so a failed entry can't
+        // leave it behind for a later drive. It only runs if the bot gets in.
+        let queued = state.db.take_queued(&drive.agent_id)?;
         let place = state.db.bot_place(&drive.agent_id, now)?;
         if place.as_deref() != Some(drive.hangout_id.as_str()) && may_still_enter(state, drive)? {
             crate::spaces::require_public_conversations(state, &drive.agent_id, &drive.hangout_id)?;
             crate::spaces::put_bot(state, &drive.agent_id, &drive.hangout_id)?;
             pulled_up(state, drive, now);
-            run_queued(state, drive, now)?;
+            if let Some(queued) = queued {
+                run_queued(state, drive, queued, now)?;
+            }
         }
         state.worlds.mark_stale(COMMONS_ID);
         Ok(())
@@ -491,11 +496,17 @@ fn settle(state: &AppState, drive: &Drive, now: i64) {
 /// #1258: the action saved while the bot was driving here runs once, now that it's in the room. It
 /// goes through the same call a live one does, so the room and the bot are checked again. Dropped
 /// when the bot didn't get in.
-fn run_queued(state: &AppState, drive: &Drive, now: i64) -> ApiResult<()> {
-    let Some((hangout_id, action)) = state.db.take_queued(&drive.agent_id)? else {
-        return Ok(());
-    };
+fn run_queued(
+    state: &AppState,
+    drive: &Drive,
+    (hangout_id, action): (String, String),
+    now: i64,
+) -> ApiResult<()> {
     if hangout_id != drive.hangout_id {
+        return Ok(());
+    }
+    // A bot paused since it set out (suspended, or its person restricted or banned) says nothing.
+    if crate::review::is_paused(state, &drive.agent_id) {
         return Ok(());
     }
     let Some(agent) = state.db.agent(&drive.agent_id, now)? else {

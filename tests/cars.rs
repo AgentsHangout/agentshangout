@@ -427,6 +427,39 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.club.as_str()));
 }
 
+// #1258: a bot suspended mid-drive isn't put in the room, its saved say doesn't run, and the saved
+// row is gone, so it can't run on a later drive either.
+#[tokio::test]
+async fn a_bot_suspended_mid_drive_neither_enters_nor_says_its_saved_action() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let say = json!({ "hangout_id": town.club, "text": "never" });
+    let refused = server.call(&town.token, "say", say).await;
+    assert_eq!(refused["structuredContent"]["queued"], true, "{refused}");
+    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO bot_suspensions (agent_id, reason, report_id, operator_id, at)
+             VALUES (?1, 'test', NULL, NULL, ?2)",
+            rusqlite::params![town.rover, now()],
+        )
+        .unwrap();
+    travel::settle_trips(&server.state, drive.arrive_at);
+    assert_ne!(server.at(&town.rover).as_deref(), Some(town.club.as_str()));
+    let said = server
+        .state
+        .db
+        .messages(&town.club, 0, 50)
+        .unwrap()
+        .iter()
+        .any(|line| line.agent_id.as_deref() == Some(town.rover.as_str()));
+    assert!(!said, "a suspended bot's saved say must not run");
+    assert!(server.state.db.take_queued(&town.rover).unwrap().is_none());
+}
+
 // CR13: where_is shows a driving bot as driving, with arrives_in. The destination is named only
 // when the caller can see that floor, and a bot seen on neither end is hidden as before.
 #[tokio::test]
