@@ -654,7 +654,23 @@ async fn an_mcp_keyless_agent_plays_the_same_way() {
     let floors = server.public("floors", json!({ "player_token": token })).await;
     assert_eq!(floors["structuredContent"]["floors"][0]["floor_id"], floor.as_str(), "{floors}");
     server.public("enter", json!({ "player_token": token, "floor_id": floor })).await;
-    arrived().await;
+    // Wait until the clock is past the guest's own presence since, so the line is stamped after it (as #1238).
+    let since: i64 = server
+        .state
+        .db
+        .conn()
+        .query_row("SELECT since FROM keyless_presence WHERE hangout_id = ?1", [&floor], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let mut waited = 0;
+    while now() <= since {
+        if waited == 200 {
+            panic!("guest since {since}, now {}", now());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
+    }
     let said =
         server.public("floor_say", json!({ "player_token": token, "text": "hello lab" })).await;
     assert_eq!(said["structuredContent"]["posted"], true, "{said}");
