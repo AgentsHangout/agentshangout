@@ -50,19 +50,45 @@ fn unseen() -> ApiError {
     ApiError::not_found()
 }
 
+/// A visitor's arrival: when its visit began, and for a bot, the id of the last line on the floor
+/// then (#1235, from `arrival_cut`). Lines after that id are the bot's to see, even in the
+/// arrival second; without one (a person, or a bot whose arrival isn't recorded) the whole
+/// arrival second is left out (R14).
+struct Arrival {
+    since: i64,
+    cut: Option<i64>,
+}
+
 /// Whether the caller may read this room now, and since when if only as a visitor (R14: a
 /// visitor reads only what came after they arrived).
-fn readable(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Option<i64>> {
+fn readable(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Option<Arrival>> {
     if !state.in_room(caller, hangout_id)? {
         return Err(unseen());
     }
-    Ok(state.guest_visit(caller, hangout_id)?.map(|visit| visit.since))
+    let Some(visit) = state.guest_visit(caller, hangout_id)? else {
+        return Ok(None);
+    };
+    let cut = match caller.agent_id.as_deref() {
+        Some(agent_id) => state.db.arrival_cut(hangout_id, agent_id, visit.since)?,
+        None => None,
+    };
+    Ok(Some(Arrival { since: visit.since, cut }))
 }
 
-fn after_arrival(since: Option<i64>, at: i64) -> ApiResult<()> {
-    match since {
-        Some(since) if at <= since => Err(unseen()),
+fn after_arrival(arrival: Option<&Arrival>, at: i64) -> ApiResult<()> {
+    match arrival {
+        Some(arrival) if at <= arrival.since => Err(unseen()),
         _ => Ok(()),
+    }
+}
+
+/// A line a visitor can see: after its arrival's last line when there is one, else as
+/// `after_arrival` says.
+fn after_arrival_line(arrival: Option<&Arrival>, message: &crate::db::Message) -> ApiResult<()> {
+    match arrival {
+        Some(Arrival { cut: Some(cut), .. }) if message.id > *cut => Ok(()),
+        Some(Arrival { cut: Some(_), .. }) => Err(unseen()),
+        _ => after_arrival(arrival, message.created_at),
     }
 }
 
@@ -101,8 +127,8 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             if message.kind == "system" {
                 return Err(unseen());
             }
-            let since = readable(state, caller, &message.hangout_id)?;
-            after_arrival(since, message.created_at)?;
+            let arrival = readable(state, caller, &message.hangout_id)?;
+            after_arrival_line(arrival.as_ref(), &message)?;
             // A101: a line the caller's block hides from them isn't one they can see.
             let hidden = crate::blocks::hidden_speakers(state, caller)?;
             if crate::blocks::hides(&hidden, &message) {
@@ -125,8 +151,8 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
         "note" => {
             let note = state.db.item_note(id)?.ok_or_else(unseen)?;
             let item = state.db.floor_item(&note.item_id)?.ok_or_else(unseen)?;
-            let since = readable(state, caller, &item.hangout_id)?;
-            after_arrival(since, note.created_at)?;
+            let arrival = readable(state, caller, &item.hangout_id)?;
+            after_arrival(arrival.as_ref(), note.created_at)?;
             Ok(Target {
                 person_id: Some(note.person_id.clone()),
                 through_bot: note.via_agent.is_some(),
@@ -146,8 +172,8 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             if pin.expires_at.is_some_and(|until| until <= at) {
                 return Err(unseen());
             }
-            let since = readable(state, caller, &pin.hangout_id)?;
-            after_arrival(since, pin.pinned_at)?;
+            let arrival = readable(state, caller, &pin.hangout_id)?;
+            after_arrival(arrival.as_ref(), pin.pinned_at)?;
             Ok(Target {
                 person_id: Some(pin.person_id.clone()),
                 through_bot: pin.bot_origin,
@@ -157,8 +183,8 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
         }
         "card" => {
             let card = state.db.board_card(id)?.ok_or_else(unseen)?;
-            let since = readable(state, caller, &card.hangout_id)?;
-            after_arrival(since, card.created_at)?;
+            let arrival = readable(state, caller, &card.hangout_id)?;
+            after_arrival(arrival.as_ref(), card.created_at)?;
             Ok(Target {
                 person_id: Some(card.person_id.clone()),
                 through_bot: card.by_bot,

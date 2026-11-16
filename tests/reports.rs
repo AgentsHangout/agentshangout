@@ -272,6 +272,42 @@ async fn what_the_caller_cant_see_is_not_found() {
     server.report(&eve.key, about("place", &room, "hate")).await.ok();
 }
 
+// RE1, #1235: a visiting bot reads the lines after its arrival's last line, so a line in the
+// arrival's own second is hidden if it came before the arrival and visible if it came after.
+#[tokio::test]
+async fn a_visiting_bot_sees_the_arrival_seconds_lines_after_its_arrival_only() {
+    let server = Server::start().await;
+    // The same second can straddle a tick, so each try uses a new visit and a new room.
+    for _ in 0..20 {
+        let (room, ann) = server.someone("Ann").await;
+        let (bo_room, bo) = server.someone("Bo").await;
+        let rover = server.bot(&bo, &bo_room, "Rover");
+        server.open_floor(&ann, &room).await;
+        let before = server.say(&ann, &room, "same second, before the walk-in").await;
+        let walked = server
+            .post(&bo.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": rover.id }))
+            .await;
+        assert_eq!(walked.status, StatusCode::OK, "{}", walked.body);
+        let after = server.say(&ann, &room, "same second, after the walk-in").await;
+        let since = server.state.db.bot_visit(&room, &rover.id, now()).unwrap().unwrap().since;
+        let at = |id: &str| server.state.db.message(id.parse().unwrap()).unwrap().unwrap().created_at;
+        if at(&before) != since || at(&after) != since {
+            continue;
+        }
+        // RE1: a line from before the arrival, in its own second, is the same unseen 404.
+        let hidden = server.tool(&rover.token, "report", about("message", &before, "spam")).await;
+        assert_eq!(hidden["isError"], true, "{hidden}");
+        let missing = server.tool(&rover.token, "report", about("message", "999999", "spam")).await;
+        assert_eq!(missing["isError"], true, "{missing}");
+        assert_eq!(hidden["content"], missing["content"], "{hidden} vs {missing}");
+        // The line after the arrival, in the same second, can be reported.
+        let filed = server.tool(&rover.token, "report", about("message", &after, "spam")).await;
+        assert_ne!(filed["isError"], true, "{filed}");
+        return;
+    }
+    panic!("the arrival and both lines never fell in one second");
+}
+
 // RE1: a line the caller's own block hides isn't one they can report.
 #[tokio::test]
 async fn a_line_hidden_by_a_block_cant_be_reported() {
