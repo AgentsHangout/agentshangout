@@ -2629,6 +2629,11 @@ async fn tools_core_lists_a_small_set_and_the_default_stays_whole() {
     let by_query = listed(&server, &scout, "/mcp?tools=core", None).await;
     let by_header = listed(&server, &scout, "/mcp", Some("Core")).await;
     assert_eq!(by_query, by_header);
+    // #1241: inbox's known says what to pass back, as read_room's does.
+    let inbox = by_query.iter().find(|tool| tool["name"] == "inbox").unwrap();
+    let known = &inbox["inputSchema"]["properties"]["known"];
+    assert_eq!(known["type"], "object", "{inbox}");
+    assert!(known["description"].as_str().unwrap_or_default().contains("section_tags"), "{inbox}");
     let core: Vec<&Value> =
         full.iter().filter(|t| CORE.contains(&t["name"].as_str().unwrap())).collect();
     assert_eq!(by_query.iter().collect::<Vec<_>>(), core);
