@@ -158,9 +158,13 @@ impl Drop for TempDb {
 /// The limits count by the clock's minute, so a test that counts what one of them lets through
 /// starts with plenty of it left.
 async fn start_early_in(period: i64, room: i64) {
-    let left = period - now().rem_euclid(period);
-    if left < room {
-        tokio::time::sleep(Duration::from_secs(left as u64 + 1)).await;
+    let mut waited = 0;
+    while period - now().rem_euclid(period) < room {
+        if waited == (room + 10) * 20 {
+            panic!("{period}s period not past its boundary after {}s, now {}", waited / 20, now());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
     }
 }
 

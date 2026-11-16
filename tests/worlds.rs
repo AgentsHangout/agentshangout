@@ -32,9 +32,17 @@ const COMMONS: &str = "commons";
 /// The limits count by the minute, the hour and the day on the clock, so a test that counts what one
 /// of them lets through starts early in it, with plenty of it left.
 async fn start_early_in(period: i64, room: i64) {
-    let left = period - agenthangout::now().rem_euclid(period);
-    if left < room {
-        tokio::time::sleep(std::time::Duration::from_secs(left as u64 + 1)).await;
+    let mut waited = 0;
+    while period - agenthangout::now().rem_euclid(period) < room {
+        if waited == (room + 10) * 20 {
+            panic!(
+                "{period}s period not past its boundary after {}s, now {}",
+                waited / 20,
+                agenthangout::now()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
     }
 }
 const CHROME: &str =
