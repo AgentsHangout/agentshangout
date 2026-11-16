@@ -21,9 +21,13 @@ const DAY: i64 = 86_400;
 /// All-day hours end at midnight UTC, and a bot's walk-in ends with them (L8), so a test that needs a
 /// bot to stay out starts early in the day, with plenty of it left.
 async fn start_early_in(period: i64, room: i64) {
-    let left = period - now().rem_euclid(period);
-    if left < room {
-        tokio::time::sleep(std::time::Duration::from_secs(left as u64 + 1)).await;
+    let mut waited = 0;
+    while period - now().rem_euclid(period) < room {
+        if waited == (room + 10) * 20 {
+            panic!("{period}s period not past its boundary after {}s, now {}", waited / 20, now());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
     }
 }
 
