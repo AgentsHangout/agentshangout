@@ -9603,7 +9603,7 @@ function createPanels(root) {
       if (panel.zone !== 'float') continue;
       panel.el.hidden = !!maximized && panel !== maximized;
       panel.rect = fit(panel.rect, area);
-      place(panel.el, panel.maximized ? area : liftAboveKeyboard(panel, panel.rect, area));
+      place(panel.el, liftAboveKeyboard(panel, panel.maximized ? area : panel.rect, area));
     }
     for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(!panels.get(name)?.el.hidden));
     // #735: a hidden dock has no size, and asking for it after the writes above lays the page out again.

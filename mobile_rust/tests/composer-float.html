@@ -78,6 +78,12 @@ const check = async (name, presses) => {
   return docked && restored;
 };
 const passed = [await check('default window', 0), await check('shrunk to about 53%', 9)];
+// A maximized window fills the area, so its composer has to dock too, and drop back on blur.
+panels.maximize('room');
+await wait();
+passed.push(await check('maximized window', 0));
+panels.maximize('room');
+await wait();
 document.querySelector('#results').textContent = JSON.stringify(results, null, 1);
 document.title = passed.every(Boolean) ? 'PASS' : 'FAIL';
 </script>
