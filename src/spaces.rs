@@ -2498,7 +2498,8 @@ pub fn go_to_queued(
             // would send it twice. A say gets a next line like use_item's.
             details.remove("retry_after");
             if action["kind"] == "say" {
-                let next = "Saved: your line posts once you've arrived. No need to say it again.";
+                let next = "Saved: your line posts once you've arrived. No need to say it again. \
+                            Going somewhere else first drops it.";
                 details.insert("next".into(), json!(next));
             }
         }

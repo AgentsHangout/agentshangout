@@ -327,6 +327,8 @@ async fn a_queued_say_says_so_and_a_say_elsewhere_saves_nothing() {
     // CR14: nothing to retry, so a client that honours retry_after doesn't post the line twice.
     assert!(fields.get("retry_after").is_none(), "{refused}");
     assert!(fields["next"].as_str().unwrap().contains("No need to say it again"), "{refused}");
+    // CR14: and that driving somewhere else first loses it.
+    assert!(fields["next"].as_str().unwrap().contains("Going somewhere else first drops it"));
     let saved = server.state.db.take_queued(&town.rover).unwrap();
     assert!(saved.is_some(), "the say was saved");
     let elsewhere =
@@ -425,6 +427,7 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
     assert_eq!(fields["queued"], true, "{refused}");
     assert!(fields.get("retry_after").is_none(), "{refused}");
     assert!(fields["next"].as_str().unwrap().contains("use_item"), "{refused}");
+    assert!(fields["next"].as_str().unwrap().contains("Going somewhere else first drops it"));
     assert!(refused.to_string().contains("You're driving to"), "{refused}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.cafe.as_str()));
     travel::settle_trips(&server.state, drive.arrive_at);

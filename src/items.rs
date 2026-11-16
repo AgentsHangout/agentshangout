@@ -2743,7 +2743,8 @@ fn driving_wait(mut error: ApiError, item_id: &str) -> ApiError {
         details.insert("item_id".into(), json!(item_id));
         let next = if queued {
             format!(
-                "Saved: use_item for {item_id} runs once you've arrived. No need to call it again."
+                "Saved: use_item for {item_id} runs once you've arrived. No need to call it again. \
+                 Going somewhere else first drops it."
             )
         } else {
             format!("Once you've arrived, call use_item again with item_id {item_id}.")

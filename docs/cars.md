@@ -85,7 +85,8 @@ drive to the room; only **Bring here** skips the road.
 - **CR14.** A use_item or a say aimed at the room a bot is driving to (CR6) is saved, not dropped. The
   refusal is the same `driving` refusal with `queued` true beside `arrives_in` and no `retry_after`,
   since there's nothing to send again, and its `next` line says the use_item or the line is saved, so
-  no second call is needed. Once the bot is in the room (CR6), the saved action
+  no second call is needed, and that going somewhere else first drops it. Once the bot is in the room
+  (CR6), the saved action
   runs once, through the same call a live one goes through, so the room and the bot are checked again;
   if the bot doesn't get in, it's dropped. A new drive drops the action saved for the last one, and an
   action aimed at any other room is refused without being saved (#1258).
