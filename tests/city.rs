@@ -1860,7 +1860,16 @@ async fn a_guest_reads_the_whiteboard_from_when_it_arrived_and_never_writes_on_i
     let refused = server.tool(&scout.token, "set_whiteboard", args).await;
     assert_eq!(refused["isError"], true, "{refused}");
 
-    pause_a_second().await;
+    // Wait until the clock is past the guest's own visit start, so the owner's write is stamped after it.
+    let since = server.state.db.bot_visit(porch, &scout.id, now()).unwrap().unwrap().since;
+    let mut waited = 0;
+    while now() <= since {
+        if waited == 200 {
+            panic!("guest since {since}, now {}", now());
+        }
+        tokio::time::sleep(StdDuration::from_millis(50)).await;
+        waited += 1;
+    }
     assert_ok(&server.put(&w.ann.key, &board, write("after-board-4417")).await);
     let read = server.tool(&scout.token, "read_room", json!({ "hangout_id": porch })).await;
     assert_eq!(read["structuredContent"]["whiteboard"]["text"], "after-board-4417", "{read}");
