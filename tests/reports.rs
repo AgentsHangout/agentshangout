@@ -243,7 +243,10 @@ async fn what_the_caller_cant_see_is_not_found() {
     server.send(&ann.key, Method::PUT, &path, Some(floor)).await.refused(StatusCode::OK);
     let (_, eve) = server.someone("Eve").await;
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({})).await.refused(StatusCode::OK);
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({}))
+        .await
+        .refused(StatusCode::OK);
     // Bounded wait (about 5s) for Eve's arrival to show before anything is read as her.
     let hangout = format!("/api/hangouts/{room}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -297,7 +300,8 @@ async fn a_visiting_bot_sees_the_arrival_seconds_lines_after_its_arrival_only() 
         assert_eq!(walked.status, StatusCode::OK, "{}", walked.body);
         let after = server.say(&ann, &room, "same second, after the walk-in").await;
         let since = server.state.db.bot_visit(&room, &rover.id, now()).unwrap().unwrap().since;
-        let at = |id: &str| server.state.db.message(id.parse().unwrap()).unwrap().unwrap().created_at;
+        let at =
+            |id: &str| server.state.db.message(id.parse().unwrap()).unwrap().unwrap().created_at;
         if at(&before) != since || at(&after) != since {
             continue;
         }
