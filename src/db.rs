@@ -2553,6 +2553,14 @@ CREATE TABLE IF NOT EXISTS bot_trips (
     arrive_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_trips_arrive ON bot_trips (arrive_at);
+-- #1258: an action a bot asked for in a room it was still driving to. It runs once when the bot
+-- arrives there, and a new drive drops it.
+CREATE TABLE IF NOT EXISTS bot_queued (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    action     TEXT NOT NULL,
+    queued_at  INTEGER NOT NULL
+);
 -- HC55 (#773): a tip from a person to someone else's bot in a room. The tipper's spend is also
 -- recorded in `credit_spends` as `tip:<id>` so a previous binary still subtracts it.
 CREATE TABLE IF NOT EXISTS bot_tips (
@@ -9866,6 +9874,8 @@ impl Db {
     /// CR5: a bot has at most one drive, so a new one replaces it.
     pub fn set_drive(&self, drive: &Drive) -> rusqlite::Result<()> {
         let route: Vec<[u16; 2]> = drive.route.iter().map(|&(x, y)| [x, y]).collect();
+        // #1258: a new drive drops the action saved for the last one.
+        self.conn().execute("DELETE FROM bot_queued WHERE agent_id = ?", [&drive.agent_id])?;
         self.conn().execute(
             "INSERT INTO bot_trips (agent_id, hangout_id, car_id, route, leave_at, arrive_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -9882,6 +9892,41 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    /// #1258: saves an action for a bot still on its way to `hangout_id`, and says whether it was
+    /// saved: false when that drive has already arrived or was replaced.
+    pub fn save_queued(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        action: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let saved = conn.execute(
+            "INSERT OR REPLACE INTO bot_queued (agent_id, hangout_id, action, queued_at)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (
+                 SELECT 1 FROM bot_trips WHERE agent_id = ?1 AND hangout_id = ?2 AND arrive_at > ?4)",
+            params![agent_id, hangout_id, action, now],
+        )?;
+        Ok(saved == 1)
+    }
+
+    /// #1258: takes the action saved for a bot, if there is one. It's taken once.
+    pub fn take_queued(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        let conn = self.conn();
+        let saved: Option<(String, String)> = conn
+            .query_row(
+                "SELECT hangout_id, action FROM bot_queued WHERE agent_id = ?",
+                [agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if saved.is_some() {
+            conn.execute("DELETE FROM bot_queued WHERE agent_id = ?", [agent_id])?;
+        }
+        Ok(saved)
     }
 
     /// CR6: the bots on the road now, who are at no place until they arrive.

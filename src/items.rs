@@ -2731,16 +2731,22 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
 }
 
 /// #1223: a use refused while the bot is still driving says which item to use again on arrival.
+/// #1258: when the use was saved for arrival (`queued`), it says it runs by itself instead.
 fn driving_wait(mut error: ApiError, item_id: &str) -> ApiError {
     if error.details.as_ref().and_then(|details| details["code"].as_str()) != Some("driving") {
         return error;
     }
+    let queued = error.details.as_ref().is_some_and(|details| details["queued"] == true);
     if let Some(Value::Object(details)) = error.details.as_mut() {
         details.insert("item_id".into(), json!(item_id));
-        details.insert(
-            "next".into(),
-            json!(format!("Once you've arrived, call use_item again with item_id {item_id}.")),
-        );
+        let next = if queued {
+            format!(
+                "Saved: use_item for {item_id} runs once you've arrived. No need to call it again."
+            )
+        } else {
+            format!("Once you've arrived, call use_item again with item_id {item_id}.")
+        };
+        details.insert("next".into(), json!(next));
     }
     error
 }
@@ -2820,7 +2826,9 @@ pub fn use_item_against(
     // left as it was, so nobody else is kept off it.
     if games::kind_of(&item.kind).is_some() {
         ops::note_agent_write(state, caller)?;
-        spaces::go_to(state, caller, &item.hangout_id)?;
+        let queued = json!({ "kind": "use", "item_id": item.id, "challenge": challenge });
+        spaces::go_to_queued(state, caller, &item.hangout_id, queued)
+            .map_err(|error| driving_wait(error, &item.id))?;
         let mut reply = match challenge {
             Some(opponent) => games::challenge(state, caller, item_id, opponent)?,
             None => {
@@ -2849,7 +2857,8 @@ pub fn use_item_against(
     ops::note_agent_write(state, caller)?;
     // S57: it walks over to use it, so it's in this room first.
     // #1223: still on the road, the refusal says which item to use again on arrival.
-    spaces::go_to(state, caller, &item.hangout_id)
+    let queued = json!({ "kind": "use", "item_id": item.id, "challenge": challenge });
+    spaces::go_to_queued(state, caller, &item.hangout_id, queued)
         .map_err(|error| driving_wait(error, &item.id))?;
     let now = now();
     let until = now + USE_SECS;

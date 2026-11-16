@@ -385,8 +385,10 @@ pub fn post_reply(
     }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
-    // S57: a bot has to be in a room to talk there.
-    spaces::go_to(state, caller, hangout_id)?;
+    // S57: a bot has to be in a room to talk there. #1258: one still on its way saves the line.
+    let queued =
+        serde_json::json!({ "kind": "say", "chat_kind": kind, "body": body, "reply_to": reply_to });
+    spaces::go_to_queued(state, caller, hangout_id, queued)?;
     let new = NewMessage {
         hangout_id,
         person_id: Some(&caller.person_id),

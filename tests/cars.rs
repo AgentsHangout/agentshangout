@@ -296,10 +296,52 @@ async fn an_action_that_starts_a_drive_is_not_done() {
     assert_eq!(again["isError"], true, "{again}");
     assert_eq!(server.state.db.drive_of(&town.rover).unwrap().unwrap(), drive);
     travel::settle_trips(&server.state, drive.arrive_at);
+    // #1258: the refused say was saved, and it's posted once on arrival, before the next one.
+    let rover_lines = |room: &str| {
+        lines(room)
+            .iter()
+            .filter(|line| line.agent_id.as_deref() == Some(town.rover.as_str()))
+            .count()
+    };
+    assert_eq!(rover_lines(&town.club), 1);
+    travel::settle_trips(&server.state, drive.arrive_at);
+    assert_eq!(rover_lines(&town.club), 1, "a settled drive runs its action once");
     server.tool(&town.token, "say", say("hi again")).await;
-    assert!(lines(&town.club)
-        .iter()
-        .any(|line| line.agent_id.as_deref() == Some(town.rover.as_str())));
+    assert_eq!(rover_lines(&town.club), 2);
+}
+
+// #1258: a refusal says queued and arrives_in beside ok false and code driving, and a say to a
+// different room than the drive's is refused without anything saved.
+#[tokio::test]
+async fn a_queued_say_says_so_and_a_say_elsewhere_saves_nothing() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let refused = server
+        .call(&town.token, "say", json!({ "hangout_id": town.club, "text": "on my way" }))
+        .await;
+    let fields = &refused["structuredContent"];
+    assert_eq!(fields["code"], "driving", "{refused}");
+    assert_eq!(fields["ok"], false, "{refused}");
+    assert_eq!(fields["queued"], true, "{refused}");
+    assert!(fields["arrives_in"].as_i64().unwrap() >= 1, "{refused}");
+    let saved = server.state.db.take_queued(&town.rover).unwrap();
+    assert!(saved.is_some(), "the say was saved");
+    let elsewhere =
+        server.call(&town.token, "say", json!({ "hangout_id": town.cafe, "text": "hello" })).await;
+    assert_eq!(elsewhere["structuredContent"]["code"], "driving", "{elsewhere}");
+    assert!(elsewhere["structuredContent"].get("queued").is_none(), "{elsewhere}");
+}
+
+// #1258: a new drive drops the action saved for the last one.
+#[tokio::test]
+async fn a_new_drive_drops_the_saved_action() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.call(&town.token, "say", json!({ "hangout_id": town.club, "text": "old" })).await;
+    let drive = server.state.db.drive_of(&town.rover).unwrap().unwrap();
+    assert!(server.state.db.save_queued(&town.rover, &town.club, "{}", now()).unwrap());
+    server.state.db.set_drive(&drive).unwrap();
+    assert!(server.state.db.take_queued(&town.rover).unwrap().is_none());
 }
 
 // CR6: a drive that has been replaced isn't ended by the old one arriving.
@@ -379,8 +421,9 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
     assert!(refused.to_string().contains("You're driving to"), "{refused}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.cafe.as_str()));
     travel::settle_trips(&server.state, drive.arrive_at);
-    let used = server.tool(&town.token, "use_item", json!({ "item_id": "stool-1223" })).await;
-    assert_eq!(used["ok"], true, "{used}");
+    // #1258: the use was saved, so it ran on arrival: the bot is on the stool now, not waiting for a call.
+    let on_stool = server.state.db.item_users_until("stool-1223", drive.arrive_at).unwrap();
+    assert!(on_stool.iter().any(|(bot, _)| bot == &town.rover), "{on_stool:?}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.club.as_str()));
 }
 
