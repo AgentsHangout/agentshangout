@@ -4425,7 +4425,8 @@ pub(crate) fn call_tool(
                 let (state, person) = (state.clone(), caller.person_id.clone());
                 runtime.spawn(async move { crate::pr_credits::check(&state, &person).await });
             }
-            Ok(json!(crate::economy::credits_of(&state.db, caller, now())?))
+            // #1240: a bot gets the credits less what only the Shop draws.
+            Ok(crate::economy::for_a_bot(&crate::economy::credits_of(&state.db, caller, now())?))
         }
         // #1056: a floor's funds, or a put into one on the owner's yes.
         "funds" => match args["fund"].as_str() {

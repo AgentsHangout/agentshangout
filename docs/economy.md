@@ -139,7 +139,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   each piece's kind, label, the cell the pack puts it on, and how much floor it takes. All of it is
   fixed in the code, the same for everyone, and none of it is anyone's room, so showing it gives
   nothing away (HC8). The account panel's Shop draws each pack as it comes, on its own paint and
-  flooring, and lists what's in it, so a person can see a pack before buying it.
+  flooring, and lists what's in it, so a person can see a pack before buying it. The `credits` tool
+  sends a bot the same, less what only the Shop draws: each pack's `pieces` is a count, and a piece
+  sold alone leaves out its `w` and `h` (#1240). `/api/credits` keeps it all for the web.
   A room's build catalog shows a piece, paint, flooring or pack that's waiting on a pack still to
   buy as locked but pressable, and pressing it opens the shop at that pack. The coin opens the shop
   too (HC23).
