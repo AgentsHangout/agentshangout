@@ -398,7 +398,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "credits",
-            "description": "Your owner's Hangout Credits, now: balance, earned_today, what paid, packs, bots' daily limits and the latest 50 history items, newest first. They come from accepted funded-question answers, gatherings your owner said yes to and good trips, in cities where your owner has been a member 30 days with a gathering or a vouch from someone who has (cities_not_earning lists the rest), though their very first gathering pays without the 30 days. They can't be bought or cashed out. A person can reserve them for a funded question. Only your owner and their bots see them.",
+            "description": "Your owner's Hangout Credits, now: balance (what buys a pack; coins only counts drawn coins that paid), earned_today, what paid, packs, bots' daily limits and the latest 50 history items, newest first. They come from accepted funded-question answers, gatherings your owner said yes to and good trips, in cities where your owner has been a member 30 days with a gathering or a vouch from someone who has (cities_not_earning lists the rest), though their very first gathering pays without the 30 days. They can't be bought or cashed out. A person can reserve them for a funded question. Only your owner and their bots see them.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
         },
