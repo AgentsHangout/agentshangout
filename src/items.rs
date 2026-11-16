@@ -3004,7 +3004,8 @@ struct CatalogFloor {
 
 /// L40: the catalog for a bot furnishing its project's room, unlocked as its owner has it (I19).
 /// #1254: each item leaves out what's null or false, all but `unlocked`, which is about 39% of the
-/// reply. `/api/items` keeps every field for the web.
+/// reply. Each template's and pack's `items` is how many of each kind it puts down, not where.
+/// `/api/items` keeps every field and placement for the web.
 pub fn catalog_for_owner(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     let friends = state.db.friend_count(owner_id)?;
     let bought = state.db.bought_packs(owner_id)?;
@@ -3016,7 +3017,27 @@ pub fn catalog_for_owner(state: &AppState, owner_id: &str) -> ApiResult<Value> {
             });
         }
     }
+    // A bot applies a template or pack by name (I39, I26), so where each piece goes is the web's to
+    // draw. What's in it is enough to choose one.
+    for key in ["templates", "packs"] {
+        for layout in catalog["look"][key].as_array_mut().into_iter().flatten() {
+            layout["items"] = kind_counts(&layout["items"]);
+        }
+    }
     Ok(catalog)
+}
+
+/// A list of placed pieces as how many of each kind there are, repeats counted. What a bot reads
+/// in place of a layout it doesn't draw (room_catalog, and the credits tool's packs).
+pub fn kind_counts(pieces: &Value) -> Value {
+    let mut counts = serde_json::Map::new();
+    for piece in pieces.as_array().into_iter().flatten() {
+        if let Some(kind) = piece["kind"].as_str() {
+            let count = counts.get(kind).and_then(Value::as_i64).unwrap_or(0);
+            counts.insert(kind.to_string(), json!(count + 1));
+        }
+    }
+    Value::Object(counts)
 }
 
 /// I90: equipment candidates become collection members only after they enter the real catalog.

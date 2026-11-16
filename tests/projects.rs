@@ -1566,8 +1566,25 @@ async fn a_bot_furnishes_its_projects_room_as_its_owner_would() {
     let bots = stool(&catalog).unwrap();
     assert_eq!(bots["unlocked"], true, "{bots}");
     assert!(bots.get("holds_notes").is_none() && bots.get("grand_price").is_none(), "{bots}");
-    let web = stool(&server.get(&town.ann.key, "/api/items").await.ok()).unwrap();
+    let web_catalog = server.get(&town.ann.key, "/api/items").await.ok();
+    let web = stool(&web_catalog).unwrap();
     assert!(web.get("holds_notes").is_some() && web.get("grand_price").is_some(), "{web}");
+    // L40: a template's or pack's items is how many of each kind it puts down, and that matches the
+    // placements /api/items keeps for the web, so the two copies can't drift.
+    for key in ["templates", "packs"] {
+        let bots = catalog["look"][key].as_array().unwrap();
+        let webs = web_catalog["look"][key].as_array().unwrap();
+        assert_eq!(bots.len(), webs.len(), "{key}");
+        for (bot, web) in bots.iter().zip(webs) {
+            let mut counts = serde_json::Map::new();
+            for piece in web["items"].as_array().unwrap() {
+                let kind = piece["kind"].as_str().unwrap();
+                let count = counts.get(kind).and_then(Value::as_i64).unwrap_or(0);
+                counts.insert(kind.to_string(), json!(count + 1));
+            }
+            assert_eq!(bot["items"], Value::Object(counts), "{key}: {bot}");
+        }
+    }
 
     // Nothing asked for is a mistake, not a quiet nothing.
     server.refused(&town.fern, "furnish_room", json!({ "project_id": project })).await;
