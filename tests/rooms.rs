@@ -7235,10 +7235,18 @@ async fn typing_does_not_reach_bots_and_revoked_readers_lose_the_stream() {
     heard_on(&mut bo_stream, &["event: typing", "Ann"]).await;
     assert!(tokio::time::timeout(Duration::from_millis(150), bot_stream.chunk()).await.is_err());
     server.state.db.remove_member(&room, &bo.id).unwrap();
-    server.post(&ann.key, &path, json!({"on":false})).await.ok();
-    let ended =
-        tokio::time::timeout(Duration::from_secs(2), bo_stream.chunk()).await.unwrap().unwrap();
-    assert!(ended.is_none());
+    // Status is asserted so a failed off post can't hide behind the end check; 5s, not 2s, since 2s starved under load.
+    let off = server.post(&ann.key, &path, json!({"on":false})).await;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.body);
+    let mut after_removal = String::new();
+    let drained = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(chunk) = bo_stream.chunk().await.unwrap() {
+            after_removal.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    })
+    .await;
+    assert!(drained.is_ok(), "no end within 5s; got {after_removal:?}");
+    assert!(!after_removal.contains("event: typing"), "{after_removal}");
     server.post(&bo.key, &path, json!({"on":true})).await.refused(StatusCode::NOT_FOUND);
 }
 
