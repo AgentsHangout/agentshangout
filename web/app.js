@@ -9587,7 +9587,8 @@ function createPanels(root) {
         panel.tab.setAttribute('aria-selected', String(panel === active));
         panel.tab.tabIndex = panel === active ? 0 : -1;
         panel.allocated = { ...rect, y: rect.y + tabHeight, h: Math.max(1, rect.h - tabHeight) };
-        place(panel.el, panel === maximized ? area : panel.allocated);
+        // M12 (#835): a window docked in a phone zone lifts its composer too, not only a floating one.
+        place(panel.el, liftAboveKeyboard(panel, panel === maximized ? area : panel.allocated, area));
       }
     }
     for (const [name, panel] of panels) {

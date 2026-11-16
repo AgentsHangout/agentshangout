@@ -84,6 +84,19 @@ await wait();
 passed.push(await check('maximized window', 0));
 panels.maximize('room');
 await wait();
+// A window docked to a side (the default for the room) is laid out in the phone's bottom zone, and
+// its composer has to dock too: only floating windows used to lift.
+panels.dock('room', 'right');
+await wait();
+passed.push(await check('docked window', 0));
+// Maximized while docked: the window fills the area, and its composer has to dock too.
+panels.maximize('room');
+await wait();
+passed.push(await check('maximized docked window', 0));
+panels.maximize('room');
+await wait();
+panels.dock('room', 'float');
+await wait();
 document.querySelector('#results').textContent = JSON.stringify(results, null, 1);
 document.title = passed.every(Boolean) ? 'PASS' : 'FAIL';
 </script>
