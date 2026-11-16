@@ -655,11 +655,12 @@ async fn an_mcp_keyless_agent_plays_the_same_way() {
     assert_eq!(floors["structuredContent"]["floors"][0]["floor_id"], floor.as_str(), "{floors}");
     server.public("enter", json!({ "player_token": token, "floor_id": floor })).await;
     // Wait until the clock is past the guest's own presence since, so the line is stamped after it (as #1238).
+    let player = server.state.db.player_by_token(&auth::hash_secret(&token)).unwrap().unwrap();
     let since: i64 = server
         .state
         .db
         .conn()
-        .query_row("SELECT since FROM keyless_presence WHERE hangout_id = ?1", [&floor], |r| {
+        .query_row("SELECT since FROM keyless_presence WHERE player_id = ?1", [player.id], |r| {
             r.get(0)
         })
         .unwrap();
