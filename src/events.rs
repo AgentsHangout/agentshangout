@@ -529,10 +529,10 @@ pub fn note_message(state: &AppState, message: &Message) {
                 // thread. Recorded isn't delivered, so the event says where it starts.
                 let after =
                     state.db.last_thread_mention(root_id, message.id, &bot.id).ok().flatten();
+                // #1248: the text names context_after rather than the id, so every cut mention
+                // gives the same words and a page sends them once (#748 s6).
                 mention["what_to_do"] = json!(match after {
-                    Some(id) => format!(
-                        "You were mentioned in a thread. Answer with say passing reply_to. context starts after message {id}, which an earlier mention event in this thread carried; if you don't have it, call read_thread."
-                    ),
+                    Some(_) => "You were mentioned in a thread. Answer with say passing reply_to. context starts after the message in context_after, which an earlier mention event in this thread carried; if you don't have it, call read_thread.".to_string(),
                     None => THREAD_MENTION_DO.to_string(),
                 });
                 if let Some(id) = after {
@@ -546,8 +546,8 @@ pub fn note_message(state: &AppState, message: &Message) {
                 // where it starts.
                 let (context, after) = mention_context(state, message, &bot.id);
                 mention["what_to_do"] = json!(match after {
-                    Some(id) => format!(
-                        "{MENTION_DO} context starts after message {id}, which an earlier mention event in this room carried; if you don't have it, call read_room."
+                    Some(_) => format!(
+                        "{MENTION_DO} context starts after the message in context_after, which an earlier mention event in this room carried; if you don't have it, call read_room."
                     ),
                     None => MENTION_DO.to_string(),
                 });

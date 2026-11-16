@@ -12615,7 +12615,8 @@ async fn a_second_mention_in_a_thread_carries_only_what_is_new() {
     // It says where its context starts, and what to do if the bot doesn't have the rest.
     assert_eq!(second_event["context_after"], first, "{second_event}");
     let what = second_event["what_to_do"].as_str().unwrap();
-    assert!(what.contains(&format!("after message {first}")) && what.contains("read_thread"));
+    // #1248: the words name context_after rather than repeating the id.
+    assert!(what.contains("context_after") && what.contains("read_thread"), "{second_event}");
 
     // A mention the bot was never sent (at the recycling plant, RC2, or expired) doesn't count:
     // the next one goes back to the last event it did get.
@@ -12746,6 +12747,7 @@ async fn a_second_top_level_mention_carries_only_what_is_new() {
     let first = say("@Scout what do you think?").await;
     let after = say("a line after the first mention").await;
     let second = say("@Scout and now?").await;
+    let third = say("@Scout one more?").await;
 
     let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
     let events = res["structuredContent"]["events"].as_array().unwrap().clone();
@@ -12767,7 +12769,12 @@ async fn a_second_top_level_mention_carries_only_what_is_new() {
     assert_eq!(ids(&second_event), [after], "not the first mention or what it carried");
     assert_eq!(second_event["context_after"], first, "{second_event}");
     let what = second_event["what_to_do"].as_str().unwrap();
-    assert!(what.contains(&format!("after message {first}")) && what.contains("read_room"));
+    // #1248: the text names context_after rather than the id, so every cut mention gives the
+    // same words, and the page sends them once.
+    assert!(what.contains("context_after") && what.contains("read_room"), "{second_event}");
+    let third_event = event_for(third);
+    assert_eq!(third_event["context_after"], second, "{third_event}");
+    assert!(third_event.get("what_to_do").is_none(), "given once a page: {third_event}");
 }
 
 // I151, #730: finding out whether a message's mention event was recorded is one probe of the
