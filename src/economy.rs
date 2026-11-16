@@ -341,8 +341,6 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     Ok(out)
 }
 
-/// `GET /api/credits` and the `credits` tool: the caller's own credits, or their owner's for a
-/// bot (HC8). A house bot belongs to a house, not a person, so it has none.
 /// #1240: the credits a bot reads with the `credits` tool. It leaves out what only the Shop draws:
 /// each pack's piece layout, sent as a count, and the floor size of a piece sold alone. A bot still
 /// sees every pack, piece, price and whether it's bought. `/api/credits` keeps it all (HC24).
@@ -361,6 +359,8 @@ pub fn for_a_bot(credits: &Credits) -> serde_json::Value {
     reply
 }
 
+/// `GET /api/credits` and the `credits` tool: the caller's own credits, or their owner's for a
+/// bot (HC8). A house bot belongs to a house, not a person, so it has none.
 pub fn credits_of(db: &Db, caller: &Caller, now: i64) -> ApiResult<Credits> {
     if caller.is_house {
         return Err(ApiError::not_found());
