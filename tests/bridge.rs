@@ -209,9 +209,18 @@ async fn played() -> (Server, Who, String, String, String, String) {
     (server, bo, agent_id, token, key, square)
 }
 
-/// A walk-in sees chat from the second after it arrived (S19), so a test waits that out.
+/// A walk-in sees chat from the second after it arrived (S19), so a test waits for the clock's
+/// second to roll over, polling now() in 50 ms steps.
 async fn arrived() {
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let start = now();
+    let mut waited = 0;
+    while now() <= start {
+        if waited == 40 {
+            panic!("clock stuck at {start} for 2s");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
+    }
 }
 
 // GB1
