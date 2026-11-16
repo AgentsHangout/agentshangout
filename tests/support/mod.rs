@@ -14,6 +14,24 @@ use sha2::{Digest, Sha256};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/// The limits count by the minute, the hour and the day on the clock, so a test that counts what one
+/// of them lets through starts early in it, with plenty of it left. It re-reads the clock as it
+/// waits, so a clock that steps still leaves `room` seconds of the period.
+pub async fn start_early_in(period: i64, room: i64) {
+    let mut waited = 0;
+    while period - agenthangout::now().rem_euclid(period) < room {
+        if waited == (room + 10) * 20 {
+            panic!(
+                "{period}s period not past its boundary after {}s, now {}",
+                waited / 20,
+                agenthangout::now()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
+    }
+}
+
 /// An already registered bot, including bots saved before house-only registration.
 /// Tests of other behavior use this fixture without reopening the retired registration path.
 pub fn legacy_bot(
