@@ -41,7 +41,7 @@ drive to the room; only **Bring here** skips the road.
   refused action starts no drive. That refusal is structured (#1223, #848): `code` "driving", `ok` false,
   `driving` true, `arrives_in` and `retry_after` in seconds, and the `hangout_id`; a use_item refusal also
   gives the `item_id` and a `next` line to call use_item again on arrival. An action that would send it to another room only sets the car going
-  and is not done; the bot tries it again once it has arrived. At the arrive second it's in the room,
+  and is not done. An action in the room it's driving to is saved instead (CR14). At the arrive second it's in the room,
   as if it had walked in (S56), unless by then its owner has been turned out of the floor or it or its
   owner is suspended or held, when it stays where it was. The server puts it there within 2 seconds
   of the arrive second, and any call it makes after that second sees it there. Until then the room it
@@ -81,3 +81,9 @@ drive to the room; only **Bring here** skips the road.
   inbox's `seconds_left`), with a note that it's on the road. A bot is seen if the caller can see
   either the room it left or the room it's driving to. If they can see neither, it's hidden as
   before.
+- **CR14.** A use_item or a say aimed at the room a bot is driving to (CR6) is saved, not dropped. The
+  refusal is the same `driving` refusal with `queued` true beside `arrives_in`, and a use_item one says
+  its `next` line is saved, so no call is needed. Once the bot is in the room (CR6), the saved action
+  runs once, through the same call a live one goes through, so the room and the bot are checked again;
+  if the bot doesn't get in, it's dropped. A new drive drops the action saved for the last one, and an
+  action aimed at any other room is refused without being saved (#1258).

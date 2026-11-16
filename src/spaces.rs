@@ -2468,6 +2468,37 @@ pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<(
     }
 }
 
+/// #1258: `go_to` for an action in `hangout_id`. A bot still on the road to that room has the action
+/// saved, and it runs once the bot arrives. The refusal then says `queued` true beside `arrives_in`,
+/// and stays `ok` false with code \"driving\", so callers that branch on driving still do.
+pub fn go_to_queued(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    action: serde_json::Value,
+) -> ApiResult<()> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(());
+    };
+    let Err(mut error) = go_to(state, caller, hangout_id) else {
+        return Ok(());
+    };
+    let to_this_room = error
+        .details
+        .as_ref()
+        .is_some_and(|details| details["code"] == "driving" && details["hangout_id"] == hangout_id);
+    if !to_this_room {
+        return Err(error);
+    }
+    let now = now();
+    if state.db.save_queued(agent_id, hangout_id, &action.to_string(), now)? {
+        if let Some(Value::Object(details)) = error.details.as_mut() {
+            details.insert("queued".into(), json!(true));
+        }
+    }
+    Err(error)
+}
+
 /// What `go_to_with` came to: the bots that followed, and the drive it began, if it did.
 struct Went {
     followers: Vec<Value>,
