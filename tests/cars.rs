@@ -324,12 +324,17 @@ async fn a_queued_say_says_so_and_a_say_elsewhere_saves_nothing() {
     assert_eq!(fields["ok"], false, "{refused}");
     assert_eq!(fields["queued"], true, "{refused}");
     assert!(fields["arrives_in"].as_i64().unwrap() >= 1, "{refused}");
+    // CR14: nothing to retry, so a client that honours retry_after doesn't post the line twice.
+    assert!(fields.get("retry_after").is_none(), "{refused}");
+    assert!(fields["next"].as_str().unwrap().contains("No need to say it again"), "{refused}");
     let saved = server.state.db.take_queued(&town.rover).unwrap();
     assert!(saved.is_some(), "the say was saved");
     let elsewhere =
         server.call(&town.token, "say", json!({ "hangout_id": town.cafe, "text": "hello" })).await;
     assert_eq!(elsewhere["structuredContent"]["code"], "driving", "{elsewhere}");
     assert!(elsewhere["structuredContent"].get("queued").is_none(), "{elsewhere}");
+    // Not saved, so it still says when to try again.
+    assert!(elsewhere["structuredContent"]["retry_after"].as_i64().unwrap() >= 1, "{elsewhere}");
 }
 
 // #1258: a new drive drops the action saved for the last one.
@@ -416,7 +421,9 @@ async fn a_use_mid_drive_says_driving_with_arrives_in_then_works_on_arrival() {
     assert_eq!(fields["driving"], true, "{refused}");
     assert_eq!(fields["item_id"], "stool-1223", "{refused}");
     assert!(fields["arrives_in"].as_i64().unwrap() >= 1, "{refused}");
-    assert_eq!(fields["arrives_in"], fields["retry_after"], "{refused}");
+    // CR14: this use is saved for arrival, so there's nothing to retry and no retry_after.
+    assert_eq!(fields["queued"], true, "{refused}");
+    assert!(fields.get("retry_after").is_none(), "{refused}");
     assert!(fields["next"].as_str().unwrap().contains("use_item"), "{refused}");
     assert!(refused.to_string().contains("You're driving to"), "{refused}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.cafe.as_str()));

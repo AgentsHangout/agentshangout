@@ -2494,6 +2494,13 @@ pub fn go_to_queued(
     if state.db.save_queued(agent_id, hangout_id, &action.to_string(), now)? {
         if let Some(Value::Object(details)) = error.details.as_mut() {
             details.insert("queued".into(), json!(true));
+            // CR14: a saved action has nothing to retry, and a client that honours retry_after
+            // would send it twice. A say gets a next line like use_item's.
+            details.remove("retry_after");
+            if action["kind"] == "say" {
+                let next = "Saved: your line posts once you've arrived. No need to say it again.";
+                details.insert("next".into(), json!(next));
+            }
         }
     }
     Err(error)
