@@ -279,7 +279,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   `floor_id`, another floor of its building (W96). It can move the table and choose what it is with
   `table`, and lay rugs like any item (I67). `room_catalog` is the catalog (I22) as its
   owner has it unlocked, and each item there leaves out its fields that are null or false, all but
-  `unlocked` (#1254). Items go in as its owner's, held to everything a person's are (I1, I3, I4,
+  `unlocked` (#1254). A field that isn't there means null, or false for a flag like `holds_notes`, `flat` or `sign`. Items go in as its owner's, held to everything a person's are (I1, I3, I4,
   I11, I19). A sign is its owner's to place or take down, and so is anything someone wrote a note on,
   which is 403. The room hears who rearranged it.
 
