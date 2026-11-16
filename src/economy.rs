@@ -342,13 +342,21 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
 }
 
 /// #1240: the credits a bot reads with the `credits` tool. It leaves out what only the Shop draws:
-/// each pack's piece layout, sent as a count, and the floor size of a piece sold alone. A bot still
-/// sees every pack, piece, price and whether it's bought. `/api/credits` keeps it all (HC24).
+/// each pack's piece layout, sent as how many of each kind it puts down, and the floor size of a
+/// piece sold alone. A bot still sees every pack, piece, price and whether it's bought.
+/// `/api/credits` keeps it all (HC24).
 pub fn for_a_bot(credits: &Credits) -> serde_json::Value {
     let mut reply = serde_json::json!(credits);
     for pack in reply["packs"].as_array_mut().into_iter().flatten() {
-        let pieces = pack["pieces"].as_array().map_or(0, Vec::len);
-        pack["pieces"] = serde_json::json!(pieces);
+        // Each kind it puts down and how many, repeats counted, so a bot can tell what's in it.
+        let mut placed = serde_json::Map::new();
+        for piece in pack["pieces"].as_array().into_iter().flatten() {
+            if let Some(kind) = piece["kind"].as_str() {
+                let count = placed.get(kind).and_then(serde_json::Value::as_i64).unwrap_or(0);
+                placed.insert(kind.to_string(), serde_json::json!(count + 1));
+            }
+        }
+        pack["pieces"] = serde_json::Value::Object(placed);
         for piece in pack["sold_alone"].as_array_mut().into_iter().flatten() {
             if let Some(fields) = piece.as_object_mut() {
                 fields.remove("w");

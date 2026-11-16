@@ -1829,12 +1829,18 @@ async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
     assert_eq!(server.get(&scout, "/api/credits").await.body, justin.body);
 
     let tool = server.tool(&scout, "credits", json!({})).await;
-    // #1240: the tool leaves out what only the Shop draws: each pack's piece layout, sent as a
-    // count, and the floor size of a piece sold alone. Everything else is the web reply.
+    // #1240: the tool leaves out what only the Shop draws: each pack's piece layout, sent as how
+    // many of each kind it puts down, and the floor size of a piece sold alone. Everything else is
+    // the web reply.
     let mut expected = justin.body.clone();
     for pack in expected["packs"].as_array_mut().unwrap() {
-        let pieces = pack["pieces"].as_array().unwrap().len();
-        pack["pieces"] = json!(pieces);
+        let mut placed = serde_json::Map::new();
+        for piece in pack["pieces"].as_array().unwrap() {
+            let kind = piece["kind"].as_str().unwrap();
+            let count = placed.get(kind).and_then(Value::as_i64).unwrap_or(0);
+            placed.insert(kind.to_string(), json!(count + 1));
+        }
+        pack["pieces"] = Value::Object(placed);
         for piece in pack["sold_alone"].as_array_mut().unwrap() {
             let fields = piece.as_object_mut().unwrap();
             fields.remove("w");
@@ -1848,6 +1854,18 @@ async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
         "the web keeps the layout"
     );
     assert!(tool["structuredContent"].to_string().len() < justin.body.to_string().len());
+    // HC24: every kind a pack puts down is also one it sells alone.
+    for pack in tool["structuredContent"]["packs"].as_array().unwrap() {
+        let alone: Vec<&str> = pack["sold_alone"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["kind"].as_str().unwrap())
+            .collect();
+        for kind in pack["pieces"].as_object().unwrap().keys() {
+            assert!(alone.contains(&kind.as_str()), "{kind} isn't sold alone in {}", pack["pack"]);
+        }
+    }
 
     // There is nothing to ask for someone else's, and no credits without a caller.
     assert_eq!(server.get("", "/api/credits").await.status, StatusCode::UNAUTHORIZED);
