@@ -3,7 +3,7 @@ const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:a
 class Element {
   constructor(tag, props = {}, children = []) {
     this.tag = tag; Object.assign(this, props); this.children = children.flat().filter(Boolean);
-    this.style = { setProperty(k, v) { this[k] = v; } }; this.dataset = {}; this.offsetParent = {};
+    this.style = { setProperty(k, v) { this[k] = v; }, getPropertyValue(k) { return this[k] || ''; } }; this.dataset = {}; this.offsetParent = {};
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
   append(...nodes) { this.children.push(...nodes); }

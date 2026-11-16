@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M12 floating chat composer over a phone keyboard</title>
+<style>body { margin: 0; font: 14px system-ui; } #results { position: fixed; left: 0; top: 0; z-index: 99; background: #fff; font: 12px monospace; white-space: pre-wrap; }</style>
+<pre id="results">Running…</pre>
+<script type="module">
+// M12 (#835): a floating chat window on a phone docks its composer on the soft keyboard.
+// Runs the shipped stylesheet, windowFrame, createPanels and dockComposer in a 393 x 852 phone frame,
+// with a stub keyboard (a visual viewport 300 px shorter, as Android shrinks it). Two windows: the
+// default size, and one shrunk with its resize grip to stop near 53% of the screen, where the gap
+// used to be about 100 px. Each must end with its composer on the keyboard and then go back on blur.
+const W = 393, H = 852, KEYBOARD = 300;
+const css = document.createElement('link');
+css.rel = 'stylesheet'; css.href = `../../web/style.css?fixture=${Date.now()}`;
+const loaded = new Promise(resolve => { css.onload = resolve; });
+document.head.append(css);
+await loaded;
+const source = (await (await fetch('../../web/app.js', { cache: 'no-store' })).text()).replace(/\r\n/g, '\n');
+const slice = (start, end = '\n}\n') => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)) + end.length);
+const hSource = slice('function h(');
+const dragSource = source.includes('function installSheetDrag(')
+  ? source.slice(source.indexOf('function installSheetDrag('), source.indexOf('\nfunction createPanels(')) : '';
+const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('\n// What goes in the panels'));
+const dockSource = slice('function dockComposer(');
+const { h, createPanels, dockComposer } = new Function(`${hSource}\n${dragSource}\n${panelSource}\n${dockSource}\nreturn { h, createPanels, dockComposer };`)();
+const { windowFrame } = await import('../../web/city.js');
+const wait = (ms = 400) => new Promise(resolve => setTimeout(resolve, ms));
+
+const frame = windowFrame({ label: 'Demo room', stats: [], heading: 'h1' });
+const root = frame.root;
+root.classList.add('wd-game', 'wd-room', 'apple-hig');
+root.style.cssText = `position: fixed; left: 0; top: 0; width: ${W}px; height: ${H}px;`;
+document.body.append(root);
+
+const panels = createPanels(root);
+const input = h('input', { placeholder: 'Message' });
+panels.add('room', 'Chat', {}, h('div', { class: 'phone-room-notices' }), h('div', { class: 'chat-log' }, 'A real message'), h('form', { class: 'chat-form' }, input));
+panels.dock('room', 'float');
+panels.open('room');
+await wait();
+
+// The stub keyboard: the visual viewport loses KEYBOARD px at the bottom while the box has focus.
+const listeners = {};
+const view = { height: H, offsetTop: 0, typingKeyboard: 0, addEventListener: (name, fn) => { (listeners[name] ||= []).push(fn); } };
+dockComposer(root, view);
+const fire = (name) => (listeners[name] || []).forEach(fn => fn());
+const panel = root.querySelector('.game-panel');
+const grip = panel.querySelector('.window-resize');
+const measure = () => {
+  const box = panel.getBoundingClientRect();
+  const composer = panel.querySelector('.chat-form').getBoundingClientRect();
+  return { panelTop: Math.round(box.top), panelBottom: Math.round(box.bottom), composerBottom: Math.round(composer.bottom), keyboardTop: H - view.typingKeyboard, typing: root.classList.contains('typing'), keyboard: root.style.getPropertyValue('--keyboard') };
+};
+const shrink = (presses) => {
+  // Each arrow press on the grip moves its bottom edge by 16 px (window.js handles the keyboard).
+  grip.focus();
+  for (let i = 0; i < presses; i++) grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+};
+const type = async (on) => {
+  if (on) { input.focus(); view.typingKeyboard = KEYBOARD; view.height = H - KEYBOARD; fire('resize'); document.dispatchEvent(new Event('focusin')); }
+  else { input.blur(); document.dispatchEvent(new Event('focusout')); view.typingKeyboard = 0; view.height = H; }
+  await wait();
+};
+
+const results = {};
+const check = async (name, presses) => {
+  if (presses) { shrink(presses); await wait(); }
+  const before = measure();
+  await type(true);
+  const typing = measure();
+  const gap = typing.keyboardTop - typing.composerBottom;
+  await type(false);
+  const after = measure();
+  const docked = typing.typing && typing.keyboard === `${KEYBOARD}px` && gap >= 0 && gap <= 12;
+  const restored = !after.typing && after.keyboard === '0px' && after.panelTop === before.panelTop && after.panelBottom === before.panelBottom;
+  results[name] = { before, typing, gap, after, docked, restored };
+  return docked && restored;
+};
+const passed = [await check('default window', 0), await check('shrunk to about 53%', 9)];
+// A maximized window fills the area, so its composer has to dock too, and drop back on blur.
+panels.maximize('room');
+await wait();
+passed.push(await check('maximized window', 0));
+panels.maximize('room');
+await wait();
+document.querySelector('#results').textContent = JSON.stringify(results, null, 1);
+document.title = passed.every(Boolean) ? 'PASS' : 'FAIL';
+</script>

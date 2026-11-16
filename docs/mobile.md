@@ -65,8 +65,14 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 - **M11.** On phones, a dialog's title and Close button remain visible and tappable as its content scrolls, in portrait and landscape. Build sheets keep their heading, dismiss handle and Close button outside the scrolling tools. Panel bodies own the main vertical scroll; lists and read-only board text expand instead of adding another vertical scroller. Chat keeps its message log, bounded notices, compact expandable poll banner (#777) and composer layout; text editors and suggestion lists retain their own controls. Landscape panels clear the navigation rail. Desktop keeps its existing layout. `python mobile_rust/tests/modal_scroll.py` checks the production dialog and sheet builders in Chromium at 393×852, 852×393 and 320×568.
 - **M12.** On a phone, while the chat box has focus, the composer sits right on the soft keyboard
   (#835): the bottom tabs step aside and the open sheet ends where the keyboard starts, whether the
-  browser shrinks the page or only the visual viewport. Leaving the box brings the tabs back with no
-  gap. `node tests/composer_keyboard_ui.cjs` runs it against a stub keyboard.
+  browser shrinks the page or only the visual viewport. A floating chat window moves down so its
+  bottom edge is on the keyboard, and is cut shorter only when it is taller than the space above.
+  Its resize grip and the room it reserves wait too. Leaving the box brings the tabs, the grip and
+  the window's saved place back with no gap. `dockComposer` in `web/app.js` sets the state, and the
+  windows lay out again on its `composerdock` event. `node tests/composer_keyboard_ui.cjs` runs the
+  docked sheet against a stub keyboard, and `python mobile_rust/tests/composer_float.py` runs the
+  floating window in a 393 × 852 phone frame, with a window at its default size and one shrunk to
+  about 53% of the screen.
 - **M9.** Panels, dialogs and Build sheets share header spacing, warm surface colours and native
   scrollbar colours. Close controls are at least 32 pixels on desktop and 44 pixels on phones.
   Phone Build cards share a 64-pixel picture area, spacing, border and corner treatment; longer

@@ -9067,6 +9067,7 @@ function dockComposer(root, view = window.visualViewport) {
     root.classList.toggle('typing', typing);
     const keyboard = typing && view ? Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop)) : 0;
     root.style.setProperty('--keyboard', `${keyboard}px`);
+    root.dispatchEvent?.(new Event('composerdock'));
   };
   document.addEventListener('focusin', sync);
   // Focus moves after focusout, so look once it has landed.
@@ -9545,6 +9546,16 @@ function createPanels(root) {
       top: { x: area.x, y: area.y, w: area.w, h: sizes.top },
       bottom: { x: area.x, y: area.y + area.h - sizes.bottom, w: area.w, h: sizes.bottom } };
   }
+  // M12 (#835): on a phone, a floating window whose chat box has focus sits with its bottom edge on the
+  // keyboard's top, so the composer is right on the keyboard. A window taller than the space above the
+  // keyboard is cut to fit. The saved rect doesn't change, so the window drops back on blur.
+  function liftAboveKeyboard(panel, rect, area) {
+    const keyboard = parseFloat(root.style.getPropertyValue('--keyboard')) || 0;
+    if (!keyboard || !root.classList.contains('typing') || !panel.el.contains(document.activeElement)) return rect;
+    const limit = Math.min(area.y + area.h, window.innerHeight - keyboard - root.getBoundingClientRect().top - 6);
+    const y = Math.max(area.y, limit - rect.h);
+    return { ...rect, y, h: Math.max(1, Math.min(rect.h, limit - y)) };
+  }
   function layout() {
     if (!root.getBoundingClientRect().width) return;
     const full = bounds(), area = { ...full };
@@ -9592,7 +9603,7 @@ function createPanels(root) {
       if (panel.zone !== 'float') continue;
       panel.el.hidden = !!maximized && panel !== maximized;
       panel.rect = fit(panel.rect, area);
-      place(panel.el, panel.maximized ? area : panel.rect);
+      place(panel.el, liftAboveKeyboard(panel, panel.maximized ? area : panel.rect, area));
     }
     for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(!panels.get(name)?.el.hidden));
     // #735: a hidden dock has no size, and asking for it after the writes above lays the page out again.
@@ -9692,6 +9703,8 @@ function createPanels(root) {
     }, () => !!zoneArea, { finish: save, cancel: rect => { ratios[rect.key] = rect.saved; layout(); } });
   }
   const observer = new ResizeObserver(layout);
+  // dockComposer tells the windows when the keyboard moves, so a floating window can lift (M12).
+  root.addEventListener('composerdock', layout);
   observer.observe(root);
   observer.observe(workspace);
   observer.observe(dock);

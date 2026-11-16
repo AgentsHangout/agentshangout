@@ -2872,6 +2872,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 /* M12 (#835): typing on a phone, the composer docks on the keyboard, with no tabs in between. */
 .apple-hig.typing .apple-tab-bar { display: none !important; }
+/* A floating window's resize grip sits under the composer, and its reserved room goes with it. */
+.apple-hig.typing .window-resize { display: none !important; }
+.apple-hig.typing > .game-panel > .game-panel-body { padding-bottom: 0 !important; }
 .apple-hig.typing > .game-panel {
   bottom: var(--keyboard, 0px) !important;
   padding-bottom: 8px !important;
