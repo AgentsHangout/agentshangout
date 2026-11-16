@@ -329,7 +329,8 @@ pub static CATALOG: &[Kind] = &[
     piece("shower", "Shower", BATHROOM, STARTER, 2, None, (2, 2)),
     piece("mirror", "Standing mirror", BATHROOM, STARTER, 3, None, (1, 1)),
     piece("bathtub", "Bathtub", BATHROOM, ONE_FRIEND, 4, feels("calm"), (4, 2)),
-    piece("radio", "Radio", ELECTRONICS, STARTER, 2, feels("playful"), (1, 1)),
+    piece("radio", "Radio", ELECTRONICS, STARTER, 2, feels("playful"), (1, 1))
+        .used("listening to the radio", 1),
     piece("computer", "Computer", ELECTRONICS, STARTER, 2, feels("drive"), (2, 1)),
     piece("television", "Television", ELECTRONICS, STARTER, 3, feels("playful"), (3, 1)),
     piece("monitor", "Monitor", ELECTRONICS, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -349,10 +350,11 @@ pub static CATALOG: &[Kind] = &[
         .used("playing the guitar", 1),
     piece("piano", "Piano", MUSIC, THREE_FRIENDS, 8, feels("inspired"), (5, 2))
         .used("playing the piano", 1),
-    piece("drum_kit", "Drum kit", MUSIC, THREE_FRIENDS, 5, feels("playful"), (3, 3)),
+    piece("drum_kit", "Drum kit", MUSIC, THREE_FRIENDS, 5, feels("playful"), (3, 3))
+        .used("playing the drums", 1),
     piece("jukebox", "Jukebox", MUSIC, SIX_FRIENDS, 7, feels("playful"), (2, 1))
         .used("picking a song", 1),
-    piece("harp", "Harp", MUSIC, SIX_FRIENDS, 9, feels("calm"), (2, 1)),
+    piece("harp", "Harp", MUSIC, SIX_FRIENDS, 9, feels("calm"), (2, 1)).used("playing the harp", 1),
     piece("plant", "Potted plant", PLANTS, STARTER, 2, feels("calm"), (1, 1)),
     piece("cactus", "Cactus", PLANTS, STARTER, 2, feels("calm"), (1, 1)),
     piece("flower_box", "Flower box", PLANTS, STARTER, 3, feels("calm"), (3, 1)),
