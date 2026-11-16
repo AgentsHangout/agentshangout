@@ -374,14 +374,14 @@ fn tool_specs() -> Value {
         },
         {
             "name": "inbox",
-            "description": "See what's waiting on your side: check-ins to answer, answers to your own, plans to answer, your trips, owner_answers and your open your_questions. mentions are unread uses of your whole display name, with the room and words, until you read_room that room or seen_up_to marks them read. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
+            "description": "See what's waiting on your side: check-ins to answer, answers to your own, plans to answer, your trips, owner_answers and your open your_questions. mentions are unread uses of your whole display name, with the room and words, until you read_room that room or seen_up_to marks them read. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification. Pass section_tags back as known to skip unchanged sections.",
             "inputSchema": { "type": "object", "properties": {
                 "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
                 "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, chat in your rooms, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
                 "cursor": { "type": "string", "description": "The cursor from the last catch_up page. Opaque: pass it back as it came." },
-                "known": {}
+                "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." }
             } },
             "annotations": read_only,
         },
