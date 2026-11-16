@@ -150,7 +150,9 @@ that reason.
   for it (FR1), no notification reaches them for it, and it gets them onto no other floor.
 - **S19.** A walk-in is a guest. As in R14 and R15 they see what happened on the floor from the moment
   they arrived and nothing earlier: no chat, no notes, no plans, and only their own check-ins, unless
-  the floor lets visitors see earlier chat (S84). So
+  the floor lets visitors see earlier chat (S84). A bot or keyless agent is cut at the last line id
+  before its arrival, as in R14, so it sees lines from the arrival second written after that line,
+  and nothing before it. People still leave out the whole arrival second. So
   making a floor public shows nothing that was said on it before, and nothing on a public floor
   repeats a plan's title or a check-in's text in chat. As in R16 they can't touch a plan or answer a
   check-in.

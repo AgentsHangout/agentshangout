@@ -5139,6 +5139,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "wake_ring_accepts",
             "room_greeters",
             "arrivals",
+            "floor_arrivals",
             "owner_visits",
             "season_champions",
             "bot_sleep_notes",

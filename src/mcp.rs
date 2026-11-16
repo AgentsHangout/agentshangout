@@ -1808,11 +1808,17 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
     };
     let mut chat: Vec<crate::db::Message> = Vec::new();
     for room in &rooms {
-        let since = state.guest_visit(caller, &room.id)?.map_or(i64::MIN, |visit| visit.since);
+        let visit = state.guest_visit(caller, &room.id)?;
+        let since = visit.as_ref().map_or(i64::MIN, |visit| visit.since);
+        let cut = match &visit {
+            Some(visit) => state.db.arrival_cut(&room.id, agent_id, visit.since)?,
+            None => None,
+        };
         chat.extend(state.db.messages_oldest_after(
             &room.id,
             since,
             Some(agent_id),
+            cut,
             chat_after,
             CATCH_UP_PAGE as i64 + 1,
         )?);
@@ -2582,6 +2588,22 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // I91: the last `limit` messages, and how many came before them.
     // I103: read_room collapses thread replies into their root message.
     let guest_since = snapshot.guest.as_ref().map(|v| v.since);
+    // #1235: a bot guest's reads start after its arrival's last line (see `guest_sees`).
+    let guest_cut = match (guest_since, caller.agent_id.as_deref()) {
+        (Some(since), Some(agent_id)) => state.db.arrival_cut(&hangout.id, agent_id, since)?,
+        _ => None,
+    };
+    // R14: with no arrival cut, a bot also sees its own lines from the arrival second.
+    let guest_sees = |message: &crate::db::Message| match (guest_cut, guest_since) {
+        (Some(cut), _) => message.id > cut,
+        (None, Some(since)) => {
+            message.created_at > since
+                || (message.created_at == since
+                    && caller.agent_id.is_some()
+                    && message.agent_id == caller.agent_id)
+        }
+        (None, None) => true,
+    };
     let mut all_roots: Vec<crate::db::Message> = Vec::new();
     let mut missing_root_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     // #610: each thread's root is looked up, and checked for a guest, once per read rather than
@@ -2602,6 +2624,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             &hangout.id,
             guest_since.unwrap_or(i64::MIN),
             caller.agent_id.as_deref(),
+            guest_cut,
             after,
             page as i64 + 1,
         )?;
@@ -2621,10 +2644,13 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 .entry(start)
                 .or_insert_with(|| state.db.thread_root_for(start).ok().flatten().unwrap_or(start));
             let root_visible = match guest_since {
-                Some(since) => *visible_of.entry(root_id).or_insert_with(|| {
-                    state.db.message(root_id).ok().flatten().is_some_and(|root| {
-                        root.hangout_id == hangout.id && root.created_at > since
-                    })
+                Some(_) => *visible_of.entry(root_id).or_insert_with(|| {
+                    state
+                        .db
+                        .message(root_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|root| root.hangout_id == hangout.id && guest_sees(&root))
                 }),
                 None => true,
             };
@@ -2651,10 +2677,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     for root_id in sorted_missing.into_iter().take(50) {
         if let Ok(Some(root)) = state.db.message(root_id) {
             if root.hangout_id == hangout.id && !crate::blocks::hides(&hide_roots, &root) {
-                if let Some(since) = guest_since {
-                    if root.created_at <= since {
-                        continue;
-                    }
+                if guest_since.is_some() && !guest_sees(&root) {
+                    continue;
                 }
                 if !all_roots.iter().any(|m| m.id == root.id) {
                     all_roots.push(root);
@@ -2833,7 +2857,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                             .filter(|reply| {
                                 reply.hangout_id == hangout.id
                                     && !crate::blocks::hides(&hide_roots, reply)
-                                    && guest_since.is_none_or(|since| reply.created_at > since)
+                                    && guest_since.is_none_or(|_| guest_sees(reply))
                             })
                             .map(|reply| {
                                 let mut reply_line = message_json(&reply);

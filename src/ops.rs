@@ -2552,14 +2552,20 @@ pub fn guest_messages(
     limit: i64,
     now: i64,
 ) -> ApiResult<Vec<Message>> {
+    // #1235: a bot's reads start after its arrival's last line, when its arrival row is this visit's.
+    let cut = match as_agent {
+        Some(agent_id) => state.db.arrival_cut(hangout_id, agent_id, visit.since)?,
+        None => None,
+    };
     let mut messages =
-        state.db.messages_since_as(hangout_id, visit.since, as_agent, after, limit)?;
+        state.db.messages_since_as(hangout_id, visit.since, as_agent, cut, after, limit)?;
     if let Some((after_id, _)) = state.db.visitor_history(hangout_id)? {
         let mut earlier = state.db.chat_before_arrival(
             hangout_id,
             after_id,
             now - DAY_SECS,
             visit.since,
+            cut,
             after,
             VISITOR_HISTORY_LINES,
         )?;

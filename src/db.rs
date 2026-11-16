@@ -47,7 +47,7 @@ pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
 mod starter;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
-pub use keyless::KeylessCard;
+pub use keyless::{keyless_who, KeylessCard};
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -534,6 +534,15 @@ CREATE TABLE IF NOT EXISTS floor_visits (
 );
 CREATE INDEX IF NOT EXISTS floor_visits_by_person ON floor_visits (person_id);
 CREATE INDEX IF NOT EXISTS floor_visits_by_bot ON floor_visits (agent_id);
+-- #1235: where a bot's or keyless agent's visit to a floor began (`since`), and the id of the last
+-- line on that floor then. Keyed like floor_visits; who is the bot's id or keyless:<player id>.
+CREATE TABLE IF NOT EXISTS floor_arrivals (
+    hangout_id          TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    who                 TEXT NOT NULL,
+    since               INTEGER NOT NULL,
+    arrival_message_id  INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, who)
+);
 CREATE TABLE IF NOT EXISTS turned_out (
     space_id    TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
@@ -8138,24 +8147,27 @@ impl Db {
 
     /// S84: chat a walk-in sees from before they arrived: chat lines only, after `after_id` and
     /// written from `from` up to their arrival, the latest `limit` of them, oldest first.
+    #[allow(clippy::too_many_arguments)]
     pub fn chat_before_arrival(
         &self,
         hangout_id: &str,
         after_id: i64,
         from: i64,
         arrived: i64,
+        cut: Option<i64>,
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
+        // #1235: with an arrival cut, the lines before it are these; the rest are read as visits.
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
              WHERE hangout_id = ? AND kind = 'chat' AND id > ? AND id > ?
-               AND created_at >= ? AND created_at <= ?
+               AND created_at >= ? AND created_at <= ? AND id <= ?
              ORDER BY id DESC LIMIT ?"
         ))?;
         let rows = stmt.query_map(
-            params![hangout_id, after_id, after, from, arrived, limit],
+            params![hangout_id, after_id, after, from, arrived, cut.unwrap_or(i64::MAX), limit],
             message_from_row,
         )?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -9255,6 +9267,15 @@ impl Db {
             "DELETE FROM floor_visits WHERE who = ? AND hangout_id != ?",
             params![visit.who, visit.hangout_id],
         )?;
+        // A new start (no walk-in here, or the last one ran out) is when its arrival is kept.
+        let ongoing = tx
+            .query_row(
+                "SELECT until FROM floor_visits WHERE hangout_id = ?1 AND who = ?2",
+                params![visit.hangout_id, visit.who],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some_and(|until| until > visit.now);
         tx.execute(
             "INSERT INTO floor_visits (hangout_id, who, person_id, agent_id, since, until)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -9263,6 +9284,9 @@ impl Db {
                 since = CASE WHEN floor_visits.until > ?5 THEN floor_visits.since ELSE excluded.since END",
             params![visit.hangout_id, visit.who, visit.person_id, visit.agent_id, visit.now, visit.until],
         )?;
+        if !ongoing && visit.agent_id.is_some() {
+            record_arrival(&tx, visit.hangout_id, visit.who, visit.now)?;
+        }
         tx.commit()?;
         Ok(WalkedIn::In)
     }
@@ -9697,6 +9721,30 @@ impl Db {
 }
 
 /// S13, S24, S39: whether a walk-in fits: `In` when it does, or why not.
+/// #1235: a bot's or keyless agent's arrival on a floor, written in the same transaction as its
+/// `since`. The id of the last line there then is what its reads start after, so a line in the
+/// second it arrived isn't lost.
+pub(crate) fn record_arrival(
+    tx: &Connection,
+    hangout_id: &str,
+    who: &str,
+    since: i64,
+) -> rusqlite::Result<()> {
+    let arrival_message_id: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(id), 0) FROM messages WHERE hangout_id = ?",
+        [hangout_id],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO floor_arrivals (hangout_id, who, since, arrival_message_id) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (hangout_id, who) DO UPDATE SET
+            since = excluded.since,
+            arrival_message_id = excluded.arrival_message_id",
+        params![hangout_id, who, since, arrival_message_id],
+    )?;
+    Ok(())
+}
+
 fn walk_in_check(
     conn: &Connection,
     visit: &NewVisit,
@@ -11013,25 +11061,47 @@ impl Db {
 
     /// I154: the oldest `limit` chat lines after `after`, oldest first, written after `since`
     /// (a guest's arrival, as `messages_since`).
+    /// As `messages_since_as`, oldest first.
     pub fn messages_oldest_after(
         &self,
         hangout_id: &str,
         since: i64,
         as_agent: Option<&str>,
+        cut: Option<i64>,
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND (created_at > ? OR (created_at = ? AND agent_id = ?))
-               AND id > ? AND kind != 'note'
-             ORDER BY id LIMIT ?"
+             WHERE hangout_id = ?1 AND (CASE WHEN ?3 IS NULL
+                   THEN (created_at > ?2 OR (created_at = ?2 AND agent_id = ?5)) ELSE id > ?3 END)
+               AND id > ?4 AND kind != 'note'
+             ORDER BY id LIMIT ?6"
         ))?;
+        // An empty agent id matches nothing, since every bot has a real one.
         let own = as_agent.unwrap_or("");
         let rows =
-            stmt.query_map(params![hangout_id, since, since, own, after, limit], message_from_row)?;
+            stmt.query_map(params![hangout_id, since, cut, after, own, limit], message_from_row)?;
         rows.collect()
+    }
+
+    /// #1235: the line id a bot's or keyless agent's visit to a floor started after, if its
+    /// arrival row is for this `since` (a visit that has since restarted or moved has none).
+    pub fn arrival_cut(
+        &self,
+        hangout_id: &str,
+        who: &str,
+        since: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT arrival_message_id FROM floor_arrivals
+                 WHERE hangout_id = ?1 AND who = ?2 AND since = ?3",
+                params![hangout_id, who, since],
+                |row| row.get(0),
+            )
+            .optional()
     }
 
     /// I58: stored thinking in a room, whether or not it has run out.
@@ -12585,31 +12655,33 @@ impl Db {
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
-        self.messages_since_as(hangout_id, since, None, after, limit)
+        self.messages_since_as(hangout_id, since, None, None, after, limit)
     }
 
-    /// As `messages_since`, but the bot `as_agent` also gets its own lines from the second it
-    /// arrived (R14). It can't have said anything earlier on this floor in that second, so
-    /// nothing from before the arrival is shown.
+    /// Chat lines a guest reads: those after its `cut` (the arrival's last line, from
+    /// `arrival_cut`), or else those written after `since` the second it arrived, plus the
+    /// caller's own lines from that second (R14).
     pub fn messages_since_as(
         &self,
         hangout_id: &str,
         since: i64,
         as_agent: Option<&str>,
+        cut: Option<i64>,
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND (created_at > ? OR (created_at = ? AND agent_id = ?))
-               AND id > ? AND kind != 'note'
-             ORDER BY id DESC LIMIT ?"
+             WHERE hangout_id = ?1 AND (CASE WHEN ?3 IS NULL
+                   THEN (created_at > ?2 OR (created_at = ?2 AND agent_id = ?5)) ELSE id > ?3 END)
+               AND id > ?4 AND kind != 'note'
+             ORDER BY id DESC LIMIT ?6"
         ))?;
         // An empty agent id matches nothing, since every bot has a real one.
         let own = as_agent.unwrap_or("");
         let rows =
-            stmt.query_map(params![hangout_id, since, since, own, after, limit], message_from_row)?;
+            stmt.query_map(params![hangout_id, since, cut, after, own, limit], message_from_row)?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
         Ok(messages)
@@ -20550,6 +20622,115 @@ mod tests {
         assert!(db.bot_visit("hz-porch", "b2", 4600).unwrap().is_none());
         assert!(db.bot_visit("hz-lr", "b2", 1500).unwrap().is_none());
         assert!(db.bot_visit("hz-porch", "b1", 1500).unwrap().is_none());
+    }
+
+    #[test]
+    fn without_an_arrival_cut_a_bot_keeps_its_own_lines_from_the_arrival_second() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute_batch(
+                "INSERT INTO spaces (id,owner_id,kind,name,about,created_at)
+                    VALUES ('hz-porch','p1','third','Porch','',0);
+                 INSERT INTO floors (hangout_id,space_id,level,access)
+                    VALUES ('hz-porch','hz-porch',0,'public');",
+            )
+            .unwrap();
+        let said = |agent: Option<&str>, body: &str, now: i64| {
+            db.insert_message(&NewMessage {
+                hangout_id: "hz-porch",
+                person_id: None,
+                agent_id: agent,
+                speaker: "Someone",
+                kind: "chat",
+                body,
+                now,
+            })
+            .unwrap()
+            .id
+        };
+        said(Some("b2"), "own same second", 1000);
+        let cut = said(Some("b1"), "other same second", 1000);
+        said(None, "person same second", 1000);
+        said(Some("b2"), "own later", 1200);
+        let bodies =
+            |messages: Vec<Message>| messages.into_iter().map(|m| m.body).collect::<Vec<_>>();
+        // No cut: the arrival second is left out, except the caller's own lines from it (R14).
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, Some("b2"), None, 0, 50).unwrap()),
+            ["own same second", "own later"]
+        );
+        assert_eq!(
+            bodies(db.messages_oldest_after("hz-porch", 1000, Some("b2"), None, 0, 50).unwrap()),
+            ["own same second", "own later"]
+        );
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, None, None, 0, 50).unwrap()),
+            ["own later"]
+        );
+        // With a cut, the cut decides: the caller's own lines from before it stay hidden.
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, Some("b2"), Some(cut), 0, 50).unwrap()),
+            ["person same second", "own later"]
+        );
+    }
+
+    #[test]
+    fn a_walk_in_reads_from_the_last_line_before_it_not_its_second() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute_batch(
+                "INSERT INTO spaces (id,owner_id,kind,name,about,created_at)
+                    VALUES ('hz-porch','p1','third','Porch','',0);
+                 INSERT INTO floors (hangout_id,space_id,level,access)
+                    VALUES ('hz-porch','hz-porch',0,'public');",
+            )
+            .unwrap();
+        say(&db, "hz-porch", "chat", "same second before", 1000);
+        let walk = |now: i64, until: i64| NewVisit {
+            hangout_id: "hz-porch",
+            who: "b2",
+            person_id: "p2",
+            agent_id: Some("b2"),
+            until,
+            now,
+        };
+        assert_eq!(db.walk_in(&walk(1000, 1500), 10, 5).unwrap(), WalkedIn::In);
+        let cut = db.arrival_cut("hz-porch", "b2", 1000).unwrap();
+        assert_eq!(cut, Some(db.max_message_id().unwrap()));
+        // Written in the arrival second, after the walk-in: a bot's read still gets it.
+        say(&db, "hz-porch", "chat", "same second after", 1000);
+        say(&db, "hz-porch", "chat", "later", 1200);
+        let bodies =
+            |messages: Vec<Message>| messages.into_iter().map(|m| m.body).collect::<Vec<_>>();
+        assert_eq!(
+            bodies(db.messages_oldest_after("hz-porch", 1000, None, cut, 0, 50).unwrap()),
+            ["same second after", "later"]
+        );
+        assert_eq!(
+            bodies(db.messages_since_as("hz-porch", 1000, None, cut, 0, 50).unwrap()),
+            ["same second after", "later"]
+        );
+        // Without a cut it's the old read: nothing from the arrival second.
+        assert_eq!(
+            bodies(db.messages_oldest_after("hz-porch", 1000, None, None, 0, 50).unwrap()),
+            ["later"]
+        );
+
+        // Still on its visit, a second walk-in keeps the start and its cut.
+        assert_eq!(db.walk_in(&walk(1100, 1500), 10, 5).unwrap(), WalkedIn::In);
+        assert_eq!(db.arrival_cut("hz-porch", "b2", 1000).unwrap(), cut);
+
+        // After the visit ran out, a new walk-in starts over, and the old lines stay hidden.
+        assert_eq!(db.walk_in(&walk(2000, 5000), 10, 5).unwrap(), WalkedIn::In);
+        let new_cut = db.max_message_id().unwrap();
+        assert_eq!(db.arrival_cut("hz-porch", "b2", 2000).unwrap(), Some(new_cut));
+        assert_eq!(db.arrival_cut("hz-porch", "b2", 1000).unwrap(), None);
+        assert!(db
+            .messages_oldest_after("hz-porch", 2000, None, Some(new_cut), 0, 50)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

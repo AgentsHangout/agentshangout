@@ -6,6 +6,11 @@ use super::*;
 /// KA8: played turns outlive the seven-day maximum key lifetime (W10) by one day.
 pub const KEYLESS_TURN_SECS: i64 = 8 * 24 * 60 * 60;
 
+/// #1235: a keyless agent's name in `floor_arrivals`, as in `floor_visits`' who.
+pub fn keyless_who(player_id: i64) -> String {
+    format!("keyless:{player_id}")
+}
+
 /// A card a keyless agent wrote (KA15).
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct KeylessCard {
@@ -82,7 +87,16 @@ impl Db {
         hangout_id: &str,
         now: i64,
     ) -> rusqlite::Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let before: Option<String> = tx
+            .query_row(
+                "SELECT hangout_id FROM keyless_presence WHERE player_id = ?",
+                [player_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        tx.execute(
             "INSERT INTO keyless_presence (player_id, hangout_id, since, active_at) VALUES (?1, ?2, ?3, ?3)
              ON CONFLICT (player_id) DO UPDATE SET
                 since = CASE WHEN hangout_id = excluded.hangout_id THEN since ELSE excluded.since END,
@@ -90,7 +104,12 @@ impl Db {
                 active_at = excluded.active_at",
             params![player_id, hangout_id, now],
         )?;
-        Ok(())
+        // #1235: a new arrival (not one already on this floor, which keeps its since) is recorded
+        // with the last line there, in the same transaction.
+        if before.as_deref() != Some(hangout_id) {
+            record_arrival(&tx, hangout_id, &keyless_who(player_id), now)?;
+        }
+        tx.commit()
     }
 
     pub fn end_keyless_presence(&self, player_id: i64) -> rusqlite::Result<bool> {
@@ -456,6 +475,48 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #1235: a keyless agent's arrival is kept with the last line on its floor, and only a new
+    // arrival writes it.
+    #[test]
+    fn a_keyless_arrival_keeps_the_last_line_before_it() {
+        let db = Db::open(":memory:").unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO people VALUES ('p','Owner','blue','hash','feed',0);
+                INSERT INTO hangouts VALUES ('h','Room','invite','p',0);
+                INSERT INTO spaces (id,owner_id,kind,name,created_at) VALUES ('h','p','third','Lab',0);
+                INSERT INTO floors (hangout_id,space_id,level,access) VALUES ('h','h',0,'private');
+                INSERT INTO players (name_seed,token_hash,seen_at,created_at) VALUES (123,'hash-guest',0,0);",
+            )
+            .unwrap();
+        let say = |body: &str, now: i64| {
+            db.insert_message(&NewMessage {
+                hangout_id: "h",
+                person_id: None,
+                agent_id: None,
+                speaker: "Someone",
+                kind: "chat",
+                body,
+                now,
+            })
+            .unwrap()
+            .id
+        };
+        let before = say("before", 1000);
+        db.put_keyless_presence(1, "h", 1000).unwrap();
+        assert_eq!(db.arrival_cut("h", "keyless:1", 1000).unwrap(), Some(before));
+        let after = say("same second", 1000);
+        // Already on the floor: it keeps its since, and the cut stays where it was.
+        db.put_keyless_presence(1, "h", 1005).unwrap();
+        assert_eq!(db.keyless_presence(1).unwrap(), Some(("h".to_string(), 1000, 1005)));
+        assert_eq!(db.arrival_cut("h", "keyless:1", 1000).unwrap(), Some(before));
+        // Gone and back in the same second: a new arrival, with the line before it as the cut.
+        db.end_keyless_presence(1).unwrap();
+        db.put_keyless_presence(1, "h", 1000).unwrap();
+        assert_eq!(db.arrival_cut("h", "keyless:1", 1000).unwrap(), Some(after));
+        assert_eq!(keyless_who(1), "keyless:1");
+    }
 
     // KA7: an upgrade may start with stale admission left on an already-private floor.
     #[test]
