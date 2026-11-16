@@ -240,16 +240,23 @@ async fn what_the_caller_cant_see_is_not_found() {
     let before = server.say(&ann, &room, "before anyone walked in").await;
     let floor = json!({ "access": "public", "create_code": CODE });
     let path = format!("/api/floors/{room}");
-    server.send(&ann.key, Method::PUT, &path, Some(floor)).await.ok();
+    server.send(&ann.key, Method::PUT, &path, Some(floor)).await.refused(StatusCode::OK);
     let (_, eve) = server.someone("Eve").await;
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({})).await.ok();
+    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({})).await.refused(StatusCode::OK);
+    // Bounded wait (about 5s) for Eve's arrival to show before anything is read as her.
+    let hangout = format!("/api/hangouts/{room}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while server.get(&eve.key, &hangout).await.status != StatusCode::OK {
+        assert!(std::time::Instant::now() < deadline, "Eve's arrival never showed");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let after = server.say(&ann, &room, "after Eve walked in").await;
 
     let refused = server.report(&eve.key, about("message", &before, "spam")).await;
     let not_found = refused.refused(StatusCode::NOT_FOUND);
-    server.report(&eve.key, about("message", &after, "spam")).await.ok();
+    server.report(&eve.key, about("message", &after, "spam")).await.refused(StatusCode::OK);
     // Someone who isn't in the room, an id that doesn't exist, and nonsense all read the same.
     let (_, zed) = server.someone("Zed").await;
     let outside = server.report(&zed.key, about("message", &after, "spam")).await;
