@@ -14,12 +14,21 @@ use sha2::{Digest, Sha256};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/// The limits that count by the clock's minute (moves, views, changes) let through what one minute
-/// allows. A test that counts those starts early in a minute, with plenty of it left.
-pub async fn start_early_in_a_minute() {
-    let second = agenthangout::now().rem_euclid(60);
-    if second > 25 {
-        tokio::time::sleep(std::time::Duration::from_secs((60 - second) as u64 + 1)).await;
+/// The limits count by the minute, the hour and the day on the clock, so a test that counts what one
+/// of them lets through starts early in it, with plenty of it left. It re-reads the clock as it
+/// waits, so a clock that steps still leaves `room` seconds of the period.
+pub async fn start_early_in(period: i64, room: i64) {
+    let mut waited = 0;
+    while period - agenthangout::now().rem_euclid(period) < room {
+        if waited == (room + 10) * 20 {
+            panic!(
+                "{period}s period not past its boundary after {}s, now {}",
+                waited / 20,
+                agenthangout::now()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        waited += 1;
     }
 }
 

@@ -6,7 +6,7 @@
 //! functions in `worlds` directly with a time of their own.
 
 mod support;
-use support::start_early_in_a_minute;
+use support::start_early_in;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -30,22 +30,6 @@ use serde_json::{json, Value};
 
 const COMMONS: &str = "commons";
 
-/// The limits count by the minute, the hour and the day on the clock, so a test that counts what one
-/// of them lets through starts early in it, with plenty of it left.
-async fn start_early_in(period: i64, room: i64) {
-    let mut waited = 0;
-    while period - agenthangout::now().rem_euclid(period) < room {
-        if waited == (room + 10) * 20 {
-            panic!(
-                "{period}s period not past its boundary after {}s, now {}",
-                waited / 20,
-                agenthangout::now()
-            );
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        waited += 1;
-    }
-}
 const CHROME: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36";
 const GOOGLEBOT: &str = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
@@ -2566,7 +2550,7 @@ async fn views_for_worlds_that_do_not_exist_are_refused_and_keep_nothing() {
 // W30
 #[tokio::test]
 async fn world_views_are_limited_to_240_a_minute_per_address() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 30).await;
     let server = Server::start().await;
     for n in 0..240 {
         let reply = server.get("/api/worlds/commons").ip("203.0.113.50").send().await;
@@ -2610,7 +2594,7 @@ async fn world_views_are_limited_to_240_a_minute_per_address() {
 async fn moves_are_capped_in_a_world_at_300_a_minute() {
     // The cap is counted a clock minute at a time, so the moves all have to land in one. On a slow
     // machine 330 moves can run past the minute, and then the cap starts again and lets them through.
-    start_early_in_a_minute().await;
+    start_early_in(60, 45).await;
     let server = Server::start().await;
     let mut guests = Vec::new();
     for _ in 0..11 {

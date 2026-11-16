@@ -8,7 +8,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod support;
-use support::start_early_in_a_minute;
+use support::start_early_in;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -33,22 +33,6 @@ const COMMONS: &str = "commons";
 /// Gives every frozen world a name and a link of its own.
 static FROZEN: AtomicU32 = AtomicU32::new(0);
 
-/// The limits count by the minute, the hour and the day on the clock, so a test that counts what one
-/// of them lets through starts early in it, with plenty of it left.
-async fn start_early_in(period: i64, room: i64) {
-    let mut waited = 0;
-    while period - agenthangout::now().rem_euclid(period) < room {
-        if waited == (room + 10) * 20 {
-            panic!(
-                "{period}s period not past its boundary after {}s, now {}",
-                waited / 20,
-                agenthangout::now()
-            );
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        waited += 1;
-    }
-}
 const CHROME: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36";
 const GOOGLEBOT: &str = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
@@ -2703,7 +2687,7 @@ async fn one_address_hammering_join_cannot_use_up_the_servers_new_guests_for_eve
 // W12, W30
 #[tokio::test]
 async fn an_address_header_that_cannot_be_read_is_still_one_limited_address() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 30).await;
     let server = Server::start().await;
     for junk in [
         "unknown",

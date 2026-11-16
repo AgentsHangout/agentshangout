@@ -13,7 +13,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod support;
-use support::start_early_in_a_minute;
+use support::start_early_in;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -1717,7 +1717,7 @@ async fn a_tip_a_goal_and_your_town_depend_on_what_is_yours_and_never_on_what_th
 // W47, W30
 #[tokio::test]
 async fn how_am_i_doing_is_limited_per_address_in_mcp_and_everything_it_says_is_listed() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     let guest = server.guest().await;
     let call = |ip: &'static str| {
@@ -1792,7 +1792,7 @@ async fn how_am_i_doing_is_limited_per_address_in_mcp_and_everything_it_says_is_
 async fn joining_again_and_again_with_a_bot_token_reads_the_whole_world_for_its_tip_each_time_and_is_never_slowed_down(
 ) {
     // Joins are counted by the minute on the clock, and 300 must all fall in one of them to pass 240.
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     crowd_the_commons(&server, 8_000);
     let bot = server.bot("Looper").await;
@@ -1909,7 +1909,7 @@ fn measure_how_many_networks_it_takes_to_get_honest_addresses_refused_views() {
 // W12
 #[tokio::test]
 async fn measure_what_a_missing_address_header_is_worth_on_a_server_that_thinks_it_is_live() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start_as_live().await;
     let mut views = 0;
     for _ in 0..300 {
@@ -1940,7 +1940,7 @@ async fn measure_what_a_missing_address_header_is_worth_on_a_server_that_thinks_
 // W30
 #[tokio::test]
 async fn measure_how_many_browsers_behind_one_address_the_view_limit_leaves_room_for() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     // The page asks every 4 seconds (5 on the front page): 15 a minute, plus one after every move.
     let mut served = 0;
@@ -3971,7 +3971,7 @@ async fn a_bulldoze_with_no_builder_or_not_the_players_is_refused_without_readin
 #[tokio::test]
 async fn refused_moves_are_limited_per_address_as_well_as_per_player_and_a_429_says_when_to_come_back(
 ) {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     let (one, two, three, elsewhere) =
         (server.guest().await, server.guest().await, server.guest().await, server.guest().await);
@@ -4102,7 +4102,7 @@ async fn a_wrong_address_gets_a_short_page_and_the_api_keeps_its_empty_404() {
 #[tokio::test]
 async fn every_429_says_how_many_seconds_to_wait_and_the_wait_fits_the_limit() {
     // The limits count by the minute, the hour and the day on the clock, so none of them may end mid-test.
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     for period in [3600, 86_400] {
         let left = period - now().rem_euclid(period);
         if left < 20 {
@@ -4452,7 +4452,7 @@ async fn me_gives_your_town_a_goal_and_a_tip_worked_out_from_your_own_tiles_and_
 // W30, W48
 #[tokio::test]
 async fn me_is_limited_like_a_view_and_a_player_who_is_not_one_is_turned_away_first() {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     let guest = server.guest().await;
     let mut told = 0;
@@ -4518,7 +4518,7 @@ async fn me_is_limited_like_a_view_and_a_player_who_is_not_one_is_turned_away_fi
 #[tokio::test]
 async fn look_over_http_is_the_tool_with_the_same_limits_and_it_lists_the_tiles_kept_for_side_streets(
 ) {
-    start_early_in_a_minute().await;
+    start_early_in(60, 35).await;
     let server = Server::start().await;
     worlds::ensure_commons(&server.state).unwrap();
     let guest = server.guest().await;
