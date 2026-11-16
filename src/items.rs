@@ -2991,10 +2991,20 @@ struct CatalogFloor {
 }
 
 /// L40: the catalog for a bot furnishing its project's room, unlocked as its owner has it (I19).
+/// #1254: each item leaves out what's null or false, all but `unlocked`, which is about 39% of the
+/// reply. `/api/items` keeps every field for the web.
 pub fn catalog_for_owner(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     let friends = state.db.friend_count(owner_id)?;
     let bought = state.db.bought_packs(owner_id)?;
-    Ok(catalog_json(friends, god_mode::is_on(state, owner_id)?, &bought))
+    let mut catalog = catalog_json(friends, god_mode::is_on(state, owner_id)?, &bought);
+    for item in catalog["items"].as_array_mut().into_iter().flatten() {
+        if let Some(fields) = item.as_object_mut() {
+            fields.retain(|name, value| {
+                name == "unlocked" || !(value.is_null() || value.as_bool() == Some(false))
+            });
+        }
+    }
+    Ok(catalog)
 }
 
 /// I90: equipment candidates become collection members only after they enter the real catalog.

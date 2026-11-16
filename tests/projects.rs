@@ -1559,6 +1559,15 @@ async fn a_bot_furnishes_its_projects_room_as_its_owner_would() {
         .unwrap()
         .iter()
         .any(|one| one["template"] == "workshop"));
+    // #1254: an item leaves out its null and false fields but keeps unlocked. /api/items keeps them.
+    let stool = |catalog: &Value| {
+        catalog["items"].as_array().unwrap().iter().find(|one| one["kind"] == "stool").cloned()
+    };
+    let bots = stool(&catalog).unwrap();
+    assert_eq!(bots["unlocked"], true, "{bots}");
+    assert!(bots.get("holds_notes").is_none() && bots.get("grand_price").is_none(), "{bots}");
+    let web = stool(&server.get(&town.ann.key, "/api/items").await.ok()).unwrap();
+    assert!(web.get("holds_notes").is_some() && web.get("grand_price").is_some(), "{web}");
 
     // Nothing asked for is a mistake, not a quiet nothing.
     server.refused(&town.fern, "furnish_room", json!({ "project_id": project })).await;
