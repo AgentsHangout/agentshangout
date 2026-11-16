@@ -3,6 +3,7 @@
 //! these are about what strangers, walk-ins, bots and the public can't do.
 
 mod support;
+use support::start_early_in_a_minute;
 
 use std::{collections::BTreeSet, time::Duration};
 
@@ -913,10 +914,7 @@ async fn a_person_can_make_sixty_changes_a_minute_across_themselves_and_their_bo
     let (room, ann) = server.someone("Ann").await;
     let scout = server.bot(&ann, &room, "Scout").await;
     let (_, bo) = server.someone("Bo").await;
-    // The count goes by the clock's minute, so this starts well inside one.
-    if now() % 60 > 40 {
-        tokio::time::sleep(Duration::from_secs((61 - now() % 60) as u64)).await;
-    }
+    start_early_in_a_minute().await;
     for n in 0..MAX_CHANGES_PER_MINUTE {
         if n % 2 == 0 {
             server.dress(&ann, json!({ "hat": "cap" })).await.ok();

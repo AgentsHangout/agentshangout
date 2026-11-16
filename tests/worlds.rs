@@ -6,6 +6,7 @@
 //! functions in `worlds` directly with a time of their own.
 
 mod support;
+use support::start_early_in_a_minute;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -2565,7 +2566,7 @@ async fn views_for_worlds_that_do_not_exist_are_refused_and_keep_nothing() {
 // W30
 #[tokio::test]
 async fn world_views_are_limited_to_240_a_minute_per_address() {
-    start_early_in(60, 30).await;
+    start_early_in_a_minute().await;
     let server = Server::start().await;
     for n in 0..240 {
         let reply = server.get("/api/worlds/commons").ip("203.0.113.50").send().await;
@@ -2609,10 +2610,7 @@ async fn world_views_are_limited_to_240_a_minute_per_address() {
 async fn moves_are_capped_in_a_world_at_300_a_minute() {
     // The cap is counted a clock minute at a time, so the moves all have to land in one. On a slow
     // machine 330 moves can run past the minute, and then the cap starts again and lets them through.
-    let left = 60 - now().rem_euclid(60);
-    if left < 45 {
-        tokio::time::sleep(Duration::from_secs(left as u64 + 1)).await;
-    }
+    start_early_in_a_minute().await;
     let server = Server::start().await;
     let mut guests = Vec::new();
     for _ in 0..11 {

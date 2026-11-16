@@ -13,6 +13,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod support;
+use support::start_early_in_a_minute;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -587,15 +588,6 @@ fn open_ground(land: &world::Land, tiles: &Tiles, x: i64, y: i64) -> bool {
                 && !tiles.contains_key(&pos)
         }
         None => false,
-    }
-}
-
-/// The limits count by the minute on the clock, so a test that counts what one minute lets through
-/// starts early in a minute, with plenty of it left.
-async fn start_early_in_a_minute() {
-    let second = now().rem_euclid(60);
-    if second > 25 {
-        tokio::time::sleep(Duration::from_secs((60 - second) as u64 + 1)).await;
     }
 }
 

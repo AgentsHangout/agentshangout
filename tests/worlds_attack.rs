@@ -8,6 +8,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod support;
+use support::start_early_in_a_minute;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -2702,7 +2703,7 @@ async fn one_address_hammering_join_cannot_use_up_the_servers_new_guests_for_eve
 // W12, W30
 #[tokio::test]
 async fn an_address_header_that_cannot_be_read_is_still_one_limited_address() {
-    start_early_in(60, 30).await;
+    start_early_in_a_minute().await;
     let server = Server::start().await;
     for junk in [
         "unknown",

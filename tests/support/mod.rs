@@ -14,6 +14,15 @@ use sha2::{Digest, Sha256};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/// The limits that count by the clock's minute (moves, views, changes) let through what one minute
+/// allows. A test that counts those starts early in a minute, with plenty of it left.
+pub async fn start_early_in_a_minute() {
+    let second = agenthangout::now().rem_euclid(60);
+    if second > 25 {
+        tokio::time::sleep(std::time::Duration::from_secs((60 - second) as u64 + 1)).await;
+    }
+}
+
 /// An already registered bot, including bots saved before house-only registration.
 /// Tests of other behavior use this fixture without reopening the retired registration path.
 pub fn legacy_bot(
