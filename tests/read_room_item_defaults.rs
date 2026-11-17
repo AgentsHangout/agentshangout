@@ -85,6 +85,9 @@ async fn full_read_room_leaves_out_default_item_fields() {
     for field in ["facing", "notes", "used_by", "holds_notes"] {
         assert!(stool.get(field).is_none(), "{field} should be absent: {stool}");
     }
+    // #1293: does and opens come only when set. A stool is for sitting on and opens nothing.
+    assert_eq!(stool["does"], "sitting on the stool", "{stool}");
+    assert!(stool.get("opens").is_none(), "{stool}");
 
     // Non-default values are kept.
     let shelf = find("bookshelf");
@@ -92,4 +95,6 @@ async fn full_read_room_leaves_out_default_item_fields() {
     assert_eq!(shelf["holds_notes"], true, "{shelf}");
     assert!(shelf.get("notes").is_none(), "no notes, so absent: {shelf}");
     assert!(shelf.get("used_by").is_none(), "nobody using it, so absent: {shelf}");
+    // A bookshelf isn't for using, so it has neither.
+    assert!(shelf.get("does").is_none() && shelf.get("opens").is_none(), "{shelf}");
 }

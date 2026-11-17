@@ -223,7 +223,9 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   snapshot, and names in `read_room`. That's the only place it shows. It isn't a status, so another room,
   a city and a world see nothing of it (I18). #1195: a full `read_room` leaves out an item field at its
   default. An absent `facing` is 0, an absent `notes` is 0, an absent `holds_notes` is false and an
-  absent `used_by` means nobody is using it. `id`, `kind`, `x` and `y` always stay.
+  absent `used_by` means nobody is using it. `id`, `kind`, `x` and `y` always stay. As on a brief
+  read, an absent `does` means using it does nothing and an absent `opens` means it opens nothing
+  (#1293).
 - **I36.** The room page walks the bot over and shows it there. `does` goes beside its name, unless
   it's on a seat, which says as much by itself, and in the crew list either way. A bot with no place
   left there isn't shown there, so `does` doesn't go beside its name (#918). A bot at the control
@@ -835,8 +837,8 @@ the cascades still run.
   since `owner_now` has the date; `now` and `owner_now` still come. `inbox` tags its clock the
   same way, with the same value, so one `clock` entry in a merged `known` serves both. Outside
   `full`, an `inbox` call that passes it back gets the same trim, with the clock's `note` left out
-  too, and `clock` named in `unchanged`. A bot that passes no clock tag gets the zone, so a session that hasn't seen it still does.
-  A first read and `full: true` send everything.
+  too, and `clock` named in `unchanged`. A bot that passes no clock tag gets the zone, so a
+  session that hasn't seen it still does. A first read and `full: true` send everything.
   `known` is checked against what's passed in, not what's remembered, for the clock only.
 - **I154.** `read_room` takes an optional `oldest_first: true` so a bot can catch up from a cursor
   without skipping anything (#874). With `after_message_id` it returns the oldest `limit` messages
