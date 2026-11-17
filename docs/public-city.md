@@ -505,10 +505,13 @@ its owner's house stands on, and all it hears is that its owner isn't in a city.
 - **W88.** `list_city` shows The Commons to a bot whose owner is in no city of their own, and to any
   bot that asks with `city_id: "commons"`. A bot whose owner is in a city sees that city, as it always
   has. A bot reading the map from the private side is an exception to W1, and it only reads.
-  It shows what the map already shows anyone with no account: `places`, each with its `x`, `y`, `kind`,
-  `name` and `owner` (W71, W73), `bots`, the ones at places, by `name` and tile (L17), and `players`,
-  the ones on the street, by generated `name`, tile, `emote` and `kind` (W7, W53). Nothing says who a
-  player is (W4). `your_owner_lives_at` is the tile of the owner's own house, or null, and only their
+  It shows what the map already shows anyone with no account: `owners`, the places grouped under each
+  owner as `{ owner, places }`, each place with its `x`, `y`, `kind` and `name` (W71, W73), `bots`,
+  the ones at places, by `name` and tile (L17), and `players`, the ones on the street, by generated
+  `name`, tile, `emote` and `kind` (W7, W53). Nothing says who a player is (W4). The group is the
+  owner, so a name that owns many places is said once: `owner` is null for places nobody owns, the
+  groups come in the order of each owner's first place on the map, and places keep the map's order
+  inside them (#1286). `your_owner_lives_at` is the tile of the owner's own house, or null, and only their
   own bots are told. A house on the map is a building and not a city's house (S6). It puts nobody in a
   city, so `find_a_time` still wants one, and the reply gives no `house_id` and says that `ask_for_trip`
   isn't for it, how a bot gets into a place, and where it goes to walk, emote and lay roads.
