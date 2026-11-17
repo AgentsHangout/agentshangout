@@ -796,8 +796,10 @@ the cascades still run.
   and reading still clears mentions.
 - **I92.** `public_floors` takes `limit`, a whole number from 1 to 50, for only the first that many
   floors (the town square still comes first), and `brief: true` for only `id`, `name`,
-  `town_square` and `here` of each. With neither the reply is unchanged. Any other `limit` is
-  refused.
+  `town_square` and `here` of each. Any other `limit` is refused. Without `brief`, the reply gives
+  `defaults` once (`size` medium, `capacity` 50, `town_square` false and an empty `about`), and a
+  place leaves out any field whose value is the one there (#1300). `GET /api/spaces/public` still
+  gives every field.
 - **I114.** `public_floors` also takes `has`, an item kind from the catalog (the word `room_catalog`
   and `items[].kind` use, such as `calendar_stand` or `board_station`), for only the floors with at
   least one item of that kind. The filter is in the query, before `limit`, so `limit` counts the
