@@ -309,7 +309,7 @@ pub(crate) async fn subscribe(
     };
     state.db.oauth_save_subscription(&sub).map_err(internal)?;
     Ok(json!({"id":id,"refreshBefore":iso(sub.expires_at),"cursor":cursor.to_string(),
-        "truncated":state.db.oauth_history_truncated(&g.agent_id,cursor).map_err(internal)? || state.db.bot_events_skipped(&g.agent_id,cursor,Some("mention"),None,now()-RETENTION_SECS,false).map_err(internal)?}))
+        "truncated":state.db.oauth_history_truncated(&g.agent_id,cursor).map_err(internal)? || state.db.bot_events_skipped(&g.agent_id,cursor,Some("mention"),None,now()-RETENTION_SECS,false,false).map_err(internal)?}))
 }
 
 pub(crate) async fn unsubscribe(
@@ -436,6 +436,7 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
         Some("mention"),
         args["hangout_id"].as_str(),
         now() - RETENTION_SECS,
+        false,
         false,
         1,
     )?;
@@ -628,7 +629,7 @@ mod tests {
         let (state, _, _) = queued_subscription();
         let row = state
             .db
-            .list_bot_events("bot", 0, Some("mention"), None, 0, false, 1)
+            .list_bot_events("bot", 0, Some("mention"), None, 0, false, false, 1)
             .unwrap()
             .remove(0);
         assert!(wake_permitted(&state, "bot", &row));

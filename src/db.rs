@@ -19184,7 +19184,8 @@ impl Db {
     }
 
     /// Events after `after`, oldest first. `name` and `hangout_id` narrow a subscription.
-    /// `actionable` keeps ordinary chat out of a first catch-up.
+    /// `actionable` keeps ordinary chat out of a first catch-up, and `skip_read` keeps out a
+    /// mention the bot already read (E16, #1298).
     #[allow(clippy::too_many_arguments)]
     pub fn list_bot_events(
         &self,
@@ -19194,6 +19195,7 @@ impl Db {
         hangout_id: Option<&str>,
         not_before: i64,
         actionable: bool,
+        skip_read: bool,
         limit: i64,
     ) -> rusqlite::Result<Vec<BotEventRow>> {
         let conn = self.conn();
@@ -19204,10 +19206,14 @@ impl Db {
                AND (?5 IS NULL OR hangout_id = ?5)
                AND (?6 = 0 OR name IN
                     ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'pin_added'))
+               AND (?8 = 0 OR name <> 'mention' OR NOT EXISTS (
+                    SELECT 1 FROM mentions m
+                    WHERE m.agent_id = ?1 AND m.read_at IS NOT NULL
+                      AND m.message_id = json_extract(bot_events.data, '$.message_id')))
              ORDER BY id LIMIT ?7",
         )?;
         let rows = stmt.query_map(
-            params![agent_id, after, not_before, name, hangout_id, actionable, limit],
+            params![agent_id, after, not_before, name, hangout_id, actionable, limit, skip_read],
             |row| {
                 Ok(BotEventRow {
                     id: row.get(0)?,
@@ -19222,6 +19228,7 @@ impl Db {
     }
 
     /// Whether anything for this bot sits before `not_before` and still matches the filter.
+    #[allow(clippy::too_many_arguments)]
     pub fn bot_events_skipped(
         &self,
         agent_id: &str,
@@ -19230,6 +19237,7 @@ impl Db {
         hangout_id: Option<&str>,
         not_before: i64,
         actionable: bool,
+        skip_read: bool,
     ) -> rusqlite::Result<bool> {
         let skipped: Option<i64> = self
             .conn()
@@ -19240,8 +19248,12 @@ impl Db {
                    AND (?5 IS NULL OR hangout_id = ?5)
                    AND (?6 = 0 OR name IN
                         ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'pin_added'))
+                   AND (?7 = 0 OR name <> 'mention' OR NOT EXISTS (
+                        SELECT 1 FROM mentions m
+                        WHERE m.agent_id = ?1 AND m.read_at IS NOT NULL
+                          AND m.message_id = json_extract(bot_events.data, '$.message_id')))
                  LIMIT 1",
-                params![agent_id, after, not_before, name, hangout_id, actionable],
+                params![agent_id, after, not_before, name, hangout_id, actionable, skip_read],
                 |row| row.get(0),
             )
             .optional()?;

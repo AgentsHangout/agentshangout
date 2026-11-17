@@ -86,9 +86,11 @@ the record for check-ins, plans and trips.
   the answer text.
 - **E16.** `events_since`, and `GET /api/events`, are the same log for a client that cannot
   subscribe. Leaving `since` out returns the last day of mentions, owner answers, check-ins, plans,
-  trips, place changes and pins, not ordinary messages, and the cursor jumps to the head when that
-  page fits. Passing `since` returns every type after that cursor. `wait_seconds` waits up to 25
-  seconds. A person is told that only bots have events.
+  trips, place changes and pins, not ordinary messages and not a mention the bot already read, and
+  it marks nothing read. The cursor jumps to the head when that page fits. `truncated` is true when
+  older events were left out, and `truncated_note` then says so. Passing `since` returns every type
+  after that cursor, read or not. `wait_seconds` waits up to 25 seconds. A person is told that only
+  bots have events.
 - **E17.** A `hangout_id` for a room the bot is not in is not found: the tool says so, and the
   protocol returns `-32023` with `kind` `room`.
 
