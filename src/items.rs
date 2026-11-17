@@ -2832,7 +2832,7 @@ fn not_a_game(state: &AppState, item: &crate::db::FloorItem) -> ApiResult<String
         format!("Games here: {}.", here.join(", "))
     };
     Ok(format!(
-        "challenge works only on a game ({}), and a {} isn't one, so nothing was played. {here}",
+        "challenge works only on a game ({}), and the {} isn't one, so nothing was played. {here}",
         kinds.join(", "),
         words(&item.kind),
     ))
