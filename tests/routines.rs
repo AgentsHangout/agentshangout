@@ -19,10 +19,15 @@ const CODE: &str = "letmein";
 const DAY: i64 = 86_400;
 
 /// All-day hours end at midnight UTC, and a bot's walk-in ends with them (L8), so a test that needs a
-/// bot to stay out starts early in the day, with plenty of it left.
+/// bot to stay out starts early in the day, with plenty of it left. Not on the boundary's own second
+/// either, where whatever is due at the next boundary is a whole period off (L66).
 async fn start_early_in(period: i64, room: i64) {
     let mut waited = 0;
-    while period - now().rem_euclid(period) < room {
+    loop {
+        let into = now().rem_euclid(period);
+        if into > 0 && period - into >= room {
+            return;
+        }
         if waited == (room + 10) * 20 {
             panic!("{period}s period not past its boundary after {}s, now {}", waited / 20, now());
         }
@@ -1594,6 +1599,8 @@ async fn a_free_hour_lets_a_bot_go_out_but_nothing_takes_it_out() {
     server.minute();
     assert!(server.out_at(&town.rover).await.is_null(), "a free hour takes nobody out");
     // It goes itself, and a free hour is still not its social hours: no meeting, no calls (L63).
+    // Clear of a half hour, so its move on from a quiet floor isn't due within one yet (L66).
+    start_early_in(WANDER_SECS, 60).await;
     server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
     let me = server.get(&town.rover, "/api/me").await.ok();
     assert_eq!(me["routine"]["social_now"], false, "{me}");
