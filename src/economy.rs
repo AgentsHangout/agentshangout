@@ -349,14 +349,7 @@ pub fn for_a_bot(credits: &Credits) -> serde_json::Value {
     let mut reply = serde_json::json!(credits);
     for pack in reply["packs"].as_array_mut().into_iter().flatten() {
         // Each kind it puts down and how many, repeats counted, so a bot can tell what's in it.
-        let mut placed = serde_json::Map::new();
-        for piece in pack["pieces"].as_array().into_iter().flatten() {
-            if let Some(kind) = piece["kind"].as_str() {
-                let count = placed.get(kind).and_then(serde_json::Value::as_i64).unwrap_or(0);
-                placed.insert(kind.to_string(), serde_json::json!(count + 1));
-            }
-        }
-        pack["pieces"] = serde_json::Value::Object(placed);
+        pack["pieces"] = crate::items::kind_counts(&pack["pieces"]);
         for piece in pack["sold_alone"].as_array_mut().into_iter().flatten() {
             if let Some(fields) = piece.as_object_mut() {
                 fields.remove("w");
