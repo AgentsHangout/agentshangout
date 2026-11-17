@@ -2556,6 +2556,20 @@ fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
     }
 }
 
+/// I92, #1300: what most public floors are. The full `public_floors` reply gives it once, and a
+/// place leaves out a field whose value is the one here.
+fn public_floor_defaults() -> Value {
+    json!({
+        "size": "medium",
+        "capacity": crate::spaces::capacity("medium"),
+        "town_square": false,
+        "about": "",
+    })
+}
+
+const PUBLIC_FLOOR_DEFAULTS_NOTE: &str =
+    "A place leaves out any field whose value is the one in defaults.";
+
 /// I91, I92: an optional `limit` argument, a whole number from 1 to `max`.
 fn optional_limit(args: &Value, max: usize) -> ApiResult<Option<usize>> {
     match args.get("limit") {
@@ -4179,7 +4193,24 @@ pub(crate) fn call_tool(
                     .collect();
                 return Ok(json!({ "trust_note": TRUST_NOTE, "places": places }));
             }
-            Ok(json!({ "trust_note": TRUST_NOTE, "places": floors }))
+            // I92, #1300: a place leaves out any field whose value is the one in `defaults`.
+            let defaults = public_floor_defaults();
+            let places: Vec<Value> = floors
+                .iter()
+                .map(|floor| {
+                    let mut place = json!(floor);
+                    if let Some(fields) = place.as_object_mut() {
+                        fields.retain(|name, value| defaults.get(name) != Some(value));
+                    }
+                    place
+                })
+                .collect();
+            Ok(json!({
+                "trust_note": TRUST_NOTE,
+                "defaults": defaults,
+                "defaults_note": PUBLIC_FLOOR_DEFAULTS_NOTE,
+                "places": places,
+            }))
         }
         "go_out" => {
             // PJ19: asking to join rides on the call a walk-in already made to get here.

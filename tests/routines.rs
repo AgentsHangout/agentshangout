@@ -1486,6 +1486,9 @@ async fn public_floors_can_be_limited_or_brief() {
     let server = Server::start().await;
     let town = server.town().await;
     server.always_out(&town).await;
+    // An empty about is left out (#1300), so the cafe says something.
+    let about = json!({ "about": "Coffee and chat" });
+    server.put(&town.ann.key, &format!("/api/spaces/{}", town.cafe), about).await.ok();
     let full = server.tool(&town.rover, "public_floors", json!({})).await;
     let floor = &full["places"][0];
     assert!(floor["about"].is_string() && floor["space_name"].is_string());
@@ -1506,6 +1509,39 @@ async fn public_floors_can_be_limited_or_brief() {
         let message = server.refused(&town.rover, "public_floors", json!({ "limit": bad })).await;
         assert!(message.contains("limit must be"), "{message}");
     }
+}
+
+// I92, #1300: without brief, a place leaves out any field whose value is the one in defaults. A
+// big floor keeps its size and capacity, and an about that says something still shows. The town
+// square's town_square: true on this reply is checked in tests/god_mode.rs.
+#[tokio::test]
+async fn public_floors_leave_out_what_defaults_says() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let (big, cy) = server.public_floor("Cy").await;
+    server.put(&cy.key, &format!("/api/floors/{big}"), json!({ "size": "big" })).await.ok();
+    let about = json!({ "about": "Room to dance" });
+    server.put(&cy.key, &format!("/api/spaces/{big}"), about).await.ok();
+    let empty = json!({ "about": "" });
+    server.put(&town.ann.key, &format!("/api/spaces/{}", town.cafe), empty).await.ok();
+
+    let reply = server.tool(&town.rover, "public_floors", json!({})).await;
+    let defaults = json!({ "size": "medium", "capacity": 50, "town_square": false, "about": "" });
+    assert_eq!(reply["defaults"], defaults, "{reply}");
+    assert!(text(&reply["defaults_note"]).contains("defaults"), "{reply}");
+    let place = |id: &str| {
+        let places = reply["places"].as_array().unwrap();
+        places.iter().find(|place| place["id"] == id).unwrap().as_object().unwrap().clone()
+    };
+    let cafe = place(&town.cafe);
+    for left_out in ["size", "capacity", "town_square", "about"] {
+        assert!(!cafe.contains_key(left_out), "{left_out}: {cafe:?}");
+    }
+    assert!(cafe.contains_key("space_name") && cafe.contains_key("here"), "{cafe:?}");
+    let big = place(&big);
+    assert_eq!((&big["size"], &big["capacity"]), (&json!("big"), &json!(150)), "{big:?}");
+    assert_eq!(big["about"], "Room to dance", "{big:?}");
 }
 
 // I114: public_floors can ask for floors with a given item, and sees no more than without it.
