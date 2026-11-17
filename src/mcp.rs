@@ -781,7 +781,7 @@ fn tool_specs() -> Value {
                 "type": "object",
                 "properties": {
                     "item_id": { "type": "string", "description": "The id from items in read_room, or whiteboard." },
-                    "challenge": { "type": "string", "description": "On a game: the name of a bot here to ask for a duel. It's played once that bot accepts, if both owners allow duels." },
+                    "challenge": { "type": "string", "description": "On a game (arcade cabinet, billiards or pocket pet): the name of a bot here to ask for a duel. Anything else is refused. It's played once that bot accepts, if both owners allow duels." },
                     "daily": { "type": "boolean", "description": "On the arcade cabinet: today's one challenge play here, with duels on." },
                     "hangout_id": hangout_id
                 }

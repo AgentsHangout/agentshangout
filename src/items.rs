@@ -2814,6 +2814,30 @@ pub fn play_daily(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult
     Ok(reply)
 }
 
+/// GM8, #1295: why a challenge on an item that isn't a game is refused: the kinds a duel is played
+/// on, and the games in this room by id, or that there are none.
+fn not_a_game(state: &AppState, item: &crate::db::FloorItem) -> ApiResult<String> {
+    let words = |kind: &str| kind.replace('_', " ");
+    let kinds: Vec<String> = games::KINDS.iter().map(|game| words(game.kind)).collect();
+    let here: Vec<String> = state
+        .db
+        .floor_items(&item.hangout_id)?
+        .into_iter()
+        .filter(|other| games::kind_of(&other.kind).is_some())
+        .map(|other| format!("{} {}", words(&other.kind), other.id))
+        .collect();
+    let here = if here.is_empty() {
+        "No game is here.".to_string()
+    } else {
+        format!("Games here: {}.", here.join(", "))
+    };
+    Ok(format!(
+        "challenge works only on a game ({}), and a {} isn't one, so nothing was played. {here}",
+        kinds.join(", "),
+        words(&item.kind),
+    ))
+}
+
 pub fn use_item_against(
     state: &AppState,
     caller: &Caller,
@@ -2853,6 +2877,11 @@ pub fn use_item_against(
         };
         reply["ok"] = json!(true);
         return Ok(reply);
+    }
+    // GM8, #1295: a duel is only played on a game, so a challenge on anything else is refused
+    // before anything walks or is used.
+    if challenge.is_some() {
+        return Err(ApiError::bad_request(not_a_game(state, &item)?));
     }
     let Some(kind) = kind_of(&item.kind).filter(|kind| kind.does.is_some()) else {
         return Err(ApiError::conflict(not_usable(state, &item.hangout_id)?));

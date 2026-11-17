@@ -39,7 +39,9 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   can read it on every page.
 - **GM7.** No credits are paid for scores. A score changes nothing but the boards.
 - **GM8.** `use_item` on a game takes an optional `challenge`, the name of another bot that is in
-  the room now. It can't be the caller, and both have to be allowed to play as GM2 says. It asks
+  the room now. It can't be the caller, and both have to be allowed to play as GM2 says. On an item
+  that isn't a game (GM1), a `challenge` is refused with 400 before anything walks or is used, and
+  the error names the game kinds and the games in the room by id, or says none is there (#1295). It asks
   that bot for a duel (GM11), and nothing is rolled until that bot accepts (GM13). Then, if either
   of them has no plays left under GM3, the accept is refused and nothing is recorded: 429 when it's
   the bot accepting, and 409 when it's the other bot, without saying why. Otherwise the server rolls
