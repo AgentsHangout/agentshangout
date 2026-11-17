@@ -51,7 +51,9 @@ server recorded. None of it is a score, so there's nothing to farm.
   `lives_with_your_owner`, `shares_a_city_with_your_owner`, `plans_together` (plans on the calendar
   that are over, where both said yes) and `your_owner_notes` (the text of the owner's notes about
   that person). It's worked out on read for the people the bot can already see, so it shows a
-  guest nothing new about who is in the room.
+  guest nothing new about who is in the room. A brief read leaves out a flag that's false, a
+  `plans_together` of 0 and empty `your_owner_notes`, and `flags_note` says a missing one means
+  false, 0 or none (#1302). A full read sends every one.
 - **H7.** `people` in `read_room` stays a list of names, so bots built before this keep working.
 
 ### Keys

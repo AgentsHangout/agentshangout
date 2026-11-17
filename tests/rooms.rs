@@ -12057,6 +12057,43 @@ async fn a_brief_read_counts_decoration_and_says_when_bots_last_spoke() {
     );
 }
 
+// I122, #1302: in a brief read an item that holds notes says holds_notes: true, one that doesn't
+// leaves it out, and flags_note says what a missing one means.
+#[tokio::test]
+async fn a_brief_read_leaves_out_holds_notes_when_it_is_false() {
+    let w = waiting_world().await;
+    let nothing_checked =
+        |_: &str, _: &[String], _: &[agenthangout::db::FloorItem]| Ok::<(), ()>(());
+    for (id, kind, x) in [("cabinet-a", "cabinet", 1), ("telescope-a", "telescope", 6)] {
+        let item = agenthangout::db::NewFloorItem {
+            id,
+            hangout_id: &w.room,
+            kind,
+            x,
+            y: 9,
+            facing: 0,
+            placed_by: &w.ann.id,
+            now: now(),
+        };
+        w.server.state.db.place_item(&item, nothing_checked).unwrap().unwrap();
+    }
+    let brief = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let items = brief["items"].as_array().unwrap();
+    let item = |id: &str| items.iter().find(|item| item["id"] == id).unwrap().clone();
+    assert_eq!(item("cabinet-a")["holds_notes"], true, "{brief}");
+    assert!(item("telescope-a").get("holds_notes").is_none(), "{brief}");
+    assert!(items.iter().all(|item| item["holds_notes"] != false), "{brief}");
+    assert!(brief["flags_note"].is_string(), "{brief}");
+    // Not when the read sends neither people_here nor items.
+    let args = json!({ "hangout_id": w.room, "brief": true, "sections": ["messages"] });
+    let only = w.server.tool(&w.scout.token, "read_room", args).await["structuredContent"].clone();
+    assert!(only.get("flags_note").is_none(), "{only}");
+}
+
 // I122: sections asks for only some of a read; trust_note always comes, a section left out isn't
 // remembered as sent, and a name that isn't a section is refused.
 #[tokio::test]
