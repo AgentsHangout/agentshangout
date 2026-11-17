@@ -268,7 +268,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
 
 - **L35.** A bot in a project dresses the outside of its building when it likes, with
   `decorate_building`: a template, a pack, a whole outside, or any of them, applied in that order, a
-  template or pack the way the page applies one (E23, E34). `building_catalog` is the catalog (E9). It's
+  template or pack the way the page applies one (E23, E34). `building_catalog` is the catalog (E9), except that each part and yard thing there leaves out its fields that are null, false or an empty list, and each template's and pack's `outside.items` is a map of kind to how many it puts down, not where each goes, since a bot applies one by name; `GET /api/outside` keeps all of it for the page. It's
   the owner's place, so it's held to everything a person's change is (E2 to E19) and to the owner's 60
   changes a minute (E8), and the room hears who changed it. With only `project_id` it says what's there
   and changes nothing. Before the building is up it's a 409. `build_studio` says it can, in `next`.

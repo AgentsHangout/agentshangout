@@ -4193,7 +4193,7 @@ pub(crate) fn call_tool(
         ),
         "lay_road" => crate::projects::lay_road(state, caller, text_arg(args, "project_id")?),
         "your_look" => crate::looks::your_look(state, caller, args),
-        "building_catalog" => Ok(crate::outside::catalog_json()),
+        "building_catalog" => Ok(crate::outside::catalog_for_a_bot()),
         "room_catalog" => crate::items::catalog_for_owner(state, &caller.person_id),
         "furnish_room" => {
             crate::projects::furnish_room(state, caller, text_arg(args, "project_id")?, args)

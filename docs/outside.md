@@ -81,7 +81,7 @@ what the map already shows.
 
 - **E9.** `GET /api/outside` lists everything an outside can be: `groups`, `parts`, `yard`, `pets`,
   `templates`, `swatches` and the limits. It's for people, so a bot gets 403 as it does for `/api/items`
-  (I22). A bot reads the same catalog with `building_catalog` (L35).
+  (I22). A bot reads it with `building_catalog`, trimmed as L35 says.
 - **E10.** A part is one thing about a place, such as its walls. In the document it's a key of `parts`,
   and its value can have a `style`, a `color`, a `number` and an `on` list. The catalog says which of
   those each part takes and which kinds of place have it, and anything else is refused with 400.

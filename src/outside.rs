@@ -2147,6 +2147,41 @@ pub fn catalog_json() -> Value {
     })
 }
 
+/// L35: the catalog as a bot reads it with `building_catalog`. A part or yard thing leaves out what
+/// it doesn't have (a null, a false or an empty list), and since a bot applies a template or pack
+/// by name, each one's items is how many of each kind it puts down. The page keeps it all (E9).
+pub fn catalog_for_a_bot() -> Value {
+    let mut catalog = catalog_json();
+    for key in ["parts", "yard"] {
+        for entry in catalog[key].as_array_mut().into_iter().flatten() {
+            if let Some(fields) = entry.as_object_mut() {
+                fields.retain(|_, value| {
+                    !(value.is_null()
+                        || value.as_bool() == Some(false)
+                        || value.as_array().is_some_and(Vec::is_empty))
+                });
+            }
+        }
+    }
+    for key in ["templates", "packs"] {
+        for layout in catalog[key].as_array_mut().into_iter().flatten() {
+            // Counted here, not with the room catalog's helper, since an outside reads nothing of a
+            // room's (E28).
+            if let Some(items) = layout["outside"].get_mut("items") {
+                let mut counts = serde_json::Map::new();
+                for piece in items.as_array().into_iter().flatten() {
+                    if let Some(kind) = piece["kind"].as_str() {
+                        let count = counts.get(kind).and_then(Value::as_i64).unwrap_or(0);
+                        counts.insert(kind.to_string(), json!(count + 1));
+                    }
+                }
+                *items = Value::Object(counts);
+            }
+        }
+    }
+    catalog
+}
+
 /// L35: a place's outside as it's stored, or an empty one.
 pub fn current(state: &AppState, x: i64, y: i64) -> ApiResult<Outside> {
     let place = standing(state, x, y)?;
