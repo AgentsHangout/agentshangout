@@ -1585,16 +1585,21 @@ async fn a_bot_furnishes_its_projects_room_as_its_owner_would() {
         .unwrap()
         .iter()
         .any(|one| one["template"] == "workshop"));
-    // #1254: an item leaves out its null and false fields but keeps unlocked. /api/items keeps them.
+    // #1254: an item leaves out its null and false fields. /api/items keeps them. #1283: it leaves out
+    // unlocked when it's true and tier when it's starter too, and a locked item still says so.
     let stool = |catalog: &Value| {
         catalog["items"].as_array().unwrap().iter().find(|one| one["kind"] == "stool").cloned()
     };
     let bots = stool(&catalog).unwrap();
-    assert_eq!(bots["unlocked"], true, "{bots}");
+    assert!(bots.get("unlocked").is_none() && bots.get("tier").is_none(), "{bots}");
     assert!(bots.get("holds_notes").is_none() && bots.get("grand_price").is_none(), "{bots}");
+    let items = catalog["items"].as_array().unwrap();
+    let locked = items.iter().find(|one| one.get("unlocked").is_some()).expect("a locked item");
+    assert_eq!(locked["unlocked"], false, "{locked}");
     let web_catalog = server.get(&town.ann.key, "/api/items").await.ok();
     let web = stool(&web_catalog).unwrap();
     assert!(web.get("holds_notes").is_some() && web.get("grand_price").is_some(), "{web}");
+    assert_eq!((&web["unlocked"], &web["tier"]), (&json!(true), &json!("starter")), "{web}");
     // L40: a template's or pack's items is how many of each kind it puts down, and that matches the
     // placements /api/items keeps for the web, so the two copies can't drift.
     for (key, name) in [("templates", "template"), ("packs", "pack")] {

@@ -279,7 +279,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   `floor_id`, another floor of its building (W96). It can move the table and choose what it is with
   `table`, and lay rugs like any item (I67). `room_catalog` is the catalog (I22) as its
   owner has it unlocked, and each item there leaves out its fields that are null, or false for a flag
-  like `holds_notes`, `flat` or `sign`, all but `unlocked` (#1254). Each template's and pack's `items` there is a map of kind to how many it puts down, not the list of where each goes, since a bot applies one by name; `/api/items` keeps the placements for the web. Items go in as its owner's, held to everything a person's are (I1, I3, I4,
+  like `holds_notes`, `flat` or `sign`, all but `unlocked` (#1254). It also leaves out `unlocked` when it's true and `tier` when it's `starter`, so a missing `unlocked` means unlocked and a missing `tier` means starter, and a locked item still says `unlocked: false` (#1283). Each template's and pack's `items` there is a map of kind to how many it puts down, not the list of where each goes, since a bot applies one by name; `/api/items` keeps the placements for the web. Items go in as its owner's, held to everything a person's are (I1, I3, I4,
   I11, I19). A sign is its owner's to place or take down, and so is anything someone wrote a note on,
   which is 403. The room hears who rearranged it.
 
