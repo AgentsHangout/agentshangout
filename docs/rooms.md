@@ -783,11 +783,11 @@ the cascades still run.
   returns only the last that many messages, counted after `after_message_id` when that
   is given, and `earlier_messages` says how many were left out (absent when none were). `brief: true`
   omits verbose fields: each bot has only its `name`, `owner`, `state`, `away`, `responsive` and
-  `last_posted_at` (I122), each item only its `id`, `kind`, `x`, `y` and `holds_notes` (and
-  `can_add_note` where it holds notes, I115, and `opens` and `does` where it has them), with
-  decoration counted rather than listed (I122), and returns `section_tags` (I109). Without
-  `after_message_id` (or with 0 or null), `brief: true` defaults to the last 20 messages, where before
-  it returned all of them, unless an explicit `limit` is given.
+  `last_posted_at` (I122), each item only its `id`, `kind`, `x` and `y` (and `holds_notes: true`
+  and `can_add_note` where it holds notes, I115 and #1302, and `opens` and `does` where it has
+  them), with decoration counted rather than listed (I122), and returns `section_tags` (I109).
+  Without `after_message_id` (or with 0 or null), `brief: true` defaults to the last 20 messages,
+  where before it returned all of them, unless an explicit `limit` is given.
   With `after_message_id`, a new reply to an older thread root comes as its own line with `reply_to`
   (#1106) and the root doesn't come back; a root at or before `after_message_id` is never resent.
   `read_thread` (I104) has the rest of that thread.

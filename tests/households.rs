@@ -534,6 +534,42 @@ async fn a_bot_knows_how_its_owner_knows_each_person_here() {
     assert!(!theirs.to_string().contains("allergic"), "{theirs}");
 }
 
+// H6, #1302: a brief read leaves out a flag that's false, a plans_together of 0 and empty
+// your_owner_notes, and flags_note says what a missing one means. A true flag and notes still
+// show, and a full read keeps every flag.
+#[tokio::test]
+async fn a_brief_read_leaves_out_the_flags_that_are_off() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let note =
+        json!({ "kind": "fact", "text": "Bo is allergic to nuts", "about_person_id": town.bo.id });
+    server.note(&town.ann, note).await.ok();
+    let args = json!({ "hangout_id": town.square, "brief": true });
+    let brief = server.tool(&town.scout, "read_room", args).await;
+    let here = |room: &Value, name: &str| {
+        let people = room["people_here"].as_array().unwrap();
+        let person = people.iter().find(|person| person["name"] == name);
+        person.unwrap_or_else(|| panic!("{name}: {room}")).as_object().unwrap().clone()
+    };
+    assert_eq!(here(&brief, "Ann")["is_your_owner"], true, "{brief}");
+    let bo = here(&brief, "Bo");
+    for off in ["is_your_owner", "lives_with_your_owner", "plans_together"] {
+        assert!(!bo.contains_key(off), "{off}: {bo:?}");
+    }
+    assert_eq!(bo["shares_a_city_with_your_owner"], true, "{bo:?}");
+    assert_eq!(bo["your_owner_notes"], json!(["Bo is allergic to nuts"]), "{bo:?}");
+    let cy = here(&brief, "Cy");
+    assert_eq!(cy["lives_with_your_owner"], true, "{cy:?}");
+    assert!(!cy.contains_key("your_owner_notes"), "{cy:?}");
+    assert!(text(&brief["flags_note"]).contains("false, 0 or none"), "{brief}");
+
+    let full = server.tool(&town.scout, "read_room", json!({ "hangout_id": town.square })).await;
+    let bo = here(&full, "Bo");
+    assert_eq!((&bo["is_your_owner"], &bo["plans_together"]), (&json!(false), &json!(0)));
+    assert_eq!(here(&full, "Cy")["your_owner_notes"], json!([]), "{full}");
+    assert!(full.get("flags_note").is_none(), "{full}");
+}
+
 // H6
 #[tokio::test]
 async fn a_guest_learns_nothing_new_about_who_is_in_the_room() {

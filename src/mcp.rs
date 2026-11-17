@@ -82,6 +82,9 @@ const RECORD_NOTE: &str = "The calendar, answers to plans, check-in statuses and
     earlier messages, the record wins: correct them and don't build on them. A blank field, such \
     as a plan with no location, is unknown, so don't fill it in.";
 
+/// H6, I122, #1302: what a brief read's missing flag means in people_here and items.
+const FLAGS_NOTE: &str = "In people_here and items, a missing flag means false, 0 or none.";
+
 /// B7: a guest sees a Porch only from its arrival, and says so instead of guessing.
 const BEFORE_YOU_ARRIVED: &str = "You see this Porch only from the moment you arrived. Anything \
     said here before then is hidden from you. If someone refers to it, say you arrived later; \
@@ -2979,7 +2982,23 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         .collect();
     let clock = clock::owner_clock(state, caller)?;
     let notes = households::notes_for(state, caller)?;
-    let people_here = households::people_here(state, caller, &snapshot.people, &notes)?;
+    let mut people_here = json!(households::people_here(state, caller, &snapshot.people, &notes)?);
+    // H6, #1302: a brief read leaves out a flag that's false, a plans_together of 0 and empty
+    // your_owner_notes. FLAGS_NOTE says what a missing one means.
+    if brief {
+        for person in people_here.as_array_mut().into_iter().flatten() {
+            if let Some(fields) = person.as_object_mut() {
+                fields.retain(|name, value| match name.as_str() {
+                    "is_your_owner" | "lives_with_your_owner" | "shares_a_city_with_your_owner" => {
+                        value.as_bool() != Some(false)
+                    }
+                    "plans_together" => value.as_i64() != Some(0),
+                    "your_owner_notes" => value.as_array().is_none_or(|notes| !notes.is_empty()),
+                    _ => true,
+                });
+            }
+        }
+    }
     // #1131: a bot using a piece shows what that use says it's doing, until it ends or switches.
     // Only the bots section shows it, so a read without that section doesn't ask each bot where it is.
     let using_doing = if sends_bots {
@@ -3183,8 +3202,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     "kind": item.kind,
                     "x": item.x,
                     "y": item.y,
-                    "holds_notes": item.holds_notes,
                 });
+                // #1302: only when it holds notes, as on a full read (#1195).
+                if item.holds_notes {
+                    shown["holds_notes"] = json!(true);
+                }
                 if let Some(opens) = item.opens {
                     shown["opens"] = json!(opens);
                 }
@@ -3611,6 +3633,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         if let Some(tags) = reply["section_tags"].as_object_mut() {
             tags.retain(|section, _| !unchanged.contains(section));
         }
+    }
+    // H6, I122, #1302: a brief read that sends people_here or items says once what a missing flag
+    // in them means. After every cut above, so it comes only with what it's about.
+    let sends = |key: &str| reply[key].as_array().is_some_and(|list| !list.is_empty());
+    if brief && (sends("people_here") || sends("items")) {
+        reply["flags_note"] = json!(FLAGS_NOTE);
     }
     // I116: remember what this brief read sent the bot, for its next incremental read here.
     if let (Some(agent_id), Some(tags)) = (bot_reading, remember.as_ref()) {
