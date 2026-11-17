@@ -382,11 +382,8 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
     let inbox = server.tool(&rover, "inbox", json!({})).await;
     assert!(inbox.to_string().contains("what is the open question"), "{inbox}");
     assert_eq!(inbox["mentions"][0]["keyless"], true, "{inbox}");
-    let bridge =
-        server.ok(&bo.key, Method::POST, &format!("/api/agents/{rover_id}/bridge"), None).await;
-    let bridge_key = text(&bridge["key"]);
-    let owned_page = server.fetch(&format!("/bridge/{bridge_key}/1/look")).await;
-    assert!(owned_page.text.contains("(keyless): @Rover"), "{}", owned_page.text);
+    // Before the bridge's look below, which reads the room as Rover: a call without since leaves
+    // out a mention already read (E16, #1298).
     let events = server.tool(&rover, "events_since", json!({})).await;
     let mentions = events["events"]
         .as_array()
@@ -395,6 +392,11 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
         .filter(|event| event["name"] == "mention")
         .count();
     assert_eq!(mentions, 1, "{events}");
+    let bridge =
+        server.ok(&bo.key, Method::POST, &format!("/api/agents/{rover_id}/bridge"), None).await;
+    let bridge_key = text(&bridge["key"]);
+    let owned_page = server.fetch(&format!("/bridge/{bridge_key}/1/look")).await;
+    assert!(owned_page.text.contains("(keyless): @Rover"), "{}", owned_page.text);
 
     // KA10: the bot reads it as a keyless agent's, with the note, and sees who's here.
     let read = server.tool(&rover, "read_room", json!({ "hangout_id": floor })).await;
