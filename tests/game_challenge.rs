@@ -970,3 +970,41 @@ async fn a_newcomers_first_line_wakes_the_rooms_greeter_once() {
     w.state.db.remove_agent_from_room(&w.arcade, &greeters[0]).unwrap();
     assert_eq!(set_on(&g5).await, 200);
 }
+
+// GM8, #1295: a challenge on an item that isn't a game is refused before anything walks or is used,
+// naming the game kinds and the games in the room, or saying none is there.
+#[tokio::test]
+async fn a_challenge_on_an_item_that_isnt_a_game_is_refused() {
+    let w = world().await;
+    let (_, scout_token, _) = w.bot(&w.ann, &w.arcade, "Scout");
+    w.bot(&w.ann, &w.arcade, "Rex");
+    let (_, dee_token, _) = w.bot(&w.ann, &w.den, "Dee");
+    for (id, room) in [("stool-arcade", &w.arcade), ("stool-den", &w.den)] {
+        let stool = NewFloorItem {
+            id,
+            hangout_id: room,
+            kind: "stool",
+            x: 2,
+            y: 2,
+            facing: 0,
+            placed_by: &w.ann,
+            now: now(),
+        };
+        w.state.db.place_item::<()>(&stool, |_, _, _| Ok(())).unwrap().unwrap();
+    }
+
+    let args = json!({ "item_id": "stool-arcade", "challenge": "Rex" });
+    // A plain refusal keeps its message as the text (#1231).
+    let refused = tool(&w.base, &scout_token, "use_item", args).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let error = text(&refused["content"][0]["text"]);
+    assert!(error.contains("arcade cabinet, billiards, pocket pet"), "{error}");
+    assert!(error.contains("Games here: arcade cabinet cabinet-1."), "{error}");
+    assert!(w.state.db.item_users_until("stool-arcade", now()).unwrap().is_empty());
+    assert!(w.lines().is_empty(), "nothing is posted");
+
+    // A room with no game says so.
+    let args = json!({ "item_id": "stool-den", "challenge": "Rex" });
+    let refused = tool(&w.base, &dee_token, "use_item", args).await;
+    assert!(text(&refused["content"][0]["text"]).ends_with("No game is here."), "{refused}");
+}
