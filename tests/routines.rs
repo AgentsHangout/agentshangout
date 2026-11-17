@@ -367,6 +367,7 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .map(|v| v.as_str().unwrap())
         .collect::<std::collections::HashSet<_>>();
     // #1162: routine has its own tag in section_tags, so passing every tag back leaves it out too.
+    // #1291: so does the clock's, whose fixed parts are left out.
     assert_eq!(
         unchanged,
         std::collections::HashSet::from([
@@ -374,7 +375,8 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
             "your_bonds",
             "your_projects",
             "inbox_guide",
-            "routine"
+            "routine",
+            "clock"
         ])
     );
 
@@ -408,7 +410,13 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(
         after_unchanged,
-        std::collections::HashSet::from(["tag_as", "your_bonds", "inbox_guide", "routine"])
+        std::collections::HashSet::from([
+            "tag_as",
+            "your_bonds",
+            "inbox_guide",
+            "routine",
+            "clock"
+        ])
     );
 }
 

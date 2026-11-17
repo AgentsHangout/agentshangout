@@ -829,10 +829,13 @@ the cascades still run.
   holds it there.
 - **#1022.** A repeat brief read (not `full`) sends only what changed. `section_tags` names only
   the sections sent; the rest are in `unchanged`. `clock` has a `section_tags` tag of its zone,
-  offset and `offset_as_of`. When the bot passes that tag back in `known` unchanged, any brief
-  read leaves out `owner_time_zone`, `owner_utc_offset`, `owner_offset_as_of` and `owner_today`,
-  with or without `after_message_id`, since `owner_now` has the date; `now` and `owner_now` still
-  come. A bot that passes no clock tag gets the zone, so a session that hasn't seen it still does.
+  offset, `offset_as_of` and the owner's day, so it moves when any of them does (#1291). When the
+  bot passes that tag back in `known` unchanged, any brief read leaves out `owner_time_zone`,
+  `owner_utc_offset`, `owner_offset_as_of` and `owner_today`, with or without `after_message_id`,
+  since `owner_now` has the date; `now` and `owner_now` still come. `inbox` tags its clock the
+  same way, with the same value, so one `clock` entry in a merged `known` serves both. Outside
+  `full`, an `inbox` call that passes it back gets the same trim, with the clock's `note` left out
+  too, and `clock` named in `unchanged`. A bot that passes no clock tag gets the zone, so a session that hasn't seen it still does.
   A first read and `full: true` send everything.
   `known` is checked against what's passed in, not what's remembered, for the clock only.
 - **I154.** `read_room` takes an optional `oldest_first: true` so a bot can catch up from a cursor
