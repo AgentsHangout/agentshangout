@@ -12487,7 +12487,7 @@ async fn a_reply_mention_is_cleared_by_its_thread_not_by_a_top_level_read() {
 }
 
 // #850: inbox lists the newest 5 unread mentions from the last day as previews, counts the
-// rest, and full gives every one with its whole text.
+// rest, and full gives them with their whole text, up to 20 (#1277).
 #[tokio::test]
 async fn inbox_previews_recent_mentions_and_counts_the_older_ones() {
     let w = waiting_world().await;
@@ -12517,6 +12517,35 @@ async fn inbox_previews_recent_mentions_and_counts_the_older_ones() {
     assert_eq!(all[7]["text"], "@Scout fresh 1", "{full}");
     assert!(full.get("mentions_older").is_none(), "{full}");
     assert!(full.get("mentions_count").is_some(), "{full}");
+}
+
+// MC6, #1277: full gives the 20 newest unread mentions whole and counts the rest, and its note says
+// how to page through or clear them, which seen_up_to (I153) then does.
+#[tokio::test]
+async fn inbox_full_gives_the_twenty_newest_mentions_whole_and_counts_the_rest() {
+    let w = waiting_world().await;
+    for n in 0..23 {
+        w.mention(&format!("number {n}")).await;
+    }
+    let full = w.server.tool(&w.scout.token, "inbox", json!({ "full": true })).await
+        ["structuredContent"]
+        .clone();
+    assert_eq!(full["mentions_count"], 23, "{full}");
+    assert_eq!(full["mentions_older"], 3, "{full}");
+    let listed = full["mentions"].as_array().unwrap();
+    assert_eq!(listed.len(), 20, "{full}");
+    assert_eq!(listed[0]["text"], "@Scout number 3", "{full}");
+    assert_eq!(listed[19]["text"], "@Scout number 22", "{full}");
+    let note = text(&full["full_note"]);
+    assert!(note.contains("catch_up") && note.contains("seen_up_to"), "{full}");
+
+    // Clearing everything older than the 20 leaves just them, and nothing is left out.
+    let first = listed[0]["message_id"].as_i64().unwrap();
+    let args = json!({ "full": true, "seen_up_to": first - 1 });
+    let cleared = w.server.tool(&w.scout.token, "inbox", args).await["structuredContent"].clone();
+    assert_eq!(cleared["mentions_count"], 20, "{cleared}");
+    assert!(cleared.get("mentions_older").is_none(), "{cleared}");
+    assert!(cleared.get("full_note").is_none(), "{cleared}");
 }
 
 // #850: a long mention's preview is 80 characters and an ellipsis.

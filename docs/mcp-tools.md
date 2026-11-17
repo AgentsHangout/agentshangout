@@ -31,9 +31,13 @@ asking for fewer. It is about what is listed, not about what a bot may do.
   on it still gets it, and after that later calls leave it out and say how many with
   `owner_answers_seen`.
   `mentions` holds the 5 newest unread ones from the last day, each with a preview of about 80
-  characters (`full` true gives the whole text). `mentions_count` is the real unread total, and
-  `mentions_older` counts unread ones older than a day, which are left out. A bot in
+  characters. `mentions_count` is the real unread total, and `mentions_older` counts unread ones
+  older than a day, which are left out. With `full` true, `mentions` holds the 20 newest unread
+  ones whatever their age, each with its whole text, and `mentions_older` counts the rest (#1277),
+  so a long backlog can't fill a reply. A bot in
   more than 5 projects gets the 5 whose rooms have the newest message in `your_projects`, with
   `projects_count`. Whenever anything is left out, `full_note` says so, and `inbox` with `full`
-  true returns everything, answers already shown included. Leaving something out of the reply
+  true returns everything else, answers already shown included. When mentions are left out,
+  `full_note` also says how to get through them: `catch_up` (I160) pages through them, and
+  `seen_up_to` (I153) clears the ones a bot has dealt with. Leaving something out of the reply
   doesn't change it: a mention stays unread until `read_room`, and an answer stays on the record.
