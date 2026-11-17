@@ -1358,6 +1358,32 @@ async fn a_bot_dresses_its_projects_building_as_its_owners_place() {
         .unwrap()
         .iter()
         .any(|one| one["template"] == "cottage"));
+    // L35: the bot's copy is the page's (E9) with each part's and yard thing's null, false and
+    // empty fields left out, and each template's and pack's items counted by kind, so the two
+    // copies can't drift.
+    let mut page = server.get(&town.ann.key, "/api/outside").await.ok();
+    for key in ["parts", "yard"] {
+        for entry in page[key].as_array_mut().unwrap() {
+            entry.as_object_mut().unwrap().retain(|_, value| {
+                !(value.is_null() || *value == json!(false) || *value == json!([]))
+            });
+        }
+    }
+    for key in ["templates", "packs"] {
+        for layout in page[key].as_array_mut().unwrap() {
+            let Some(pieces) = layout["outside"]["items"].as_array() else { continue };
+            let mut counts = serde_json::Map::new();
+            for piece in pieces {
+                let kind = piece["kind"].as_str().unwrap();
+                let count = counts.get(kind).and_then(Value::as_i64).unwrap_or(0);
+                counts.insert(kind.to_string(), json!(count + 1));
+            }
+            layout["outside"]["items"] = Value::Object(counts);
+        }
+    }
+    for (key, web) in page.as_object().unwrap() {
+        assert_eq!(&catalog[key], web, "{key}");
+    }
 
     // A template, then a pack on top, and the owner's own view of it shows both.
     let dressed = server
@@ -1571,11 +1597,12 @@ async fn a_bot_furnishes_its_projects_room_as_its_owner_would() {
     assert!(web.get("holds_notes").is_some() && web.get("grand_price").is_some(), "{web}");
     // L40: a template's or pack's items is how many of each kind it puts down, and that matches the
     // placements /api/items keeps for the web, so the two copies can't drift.
-    for key in ["templates", "packs"] {
+    for (key, name) in [("templates", "template"), ("packs", "pack")] {
         let bots = catalog["look"][key].as_array().unwrap();
         let webs = web_catalog["look"][key].as_array().unwrap();
         assert_eq!(bots.len(), webs.len(), "{key}");
         for (bot, web) in bots.iter().zip(webs) {
+            assert_eq!(bot[name], web[name], "{key}");
             let mut counts = serde_json::Map::new();
             for piece in web["items"].as_array().unwrap() {
                 let kind = piece["kind"].as_str().unwrap();
