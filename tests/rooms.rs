@@ -13932,6 +13932,51 @@ async fn a_repeat_brief_read_sends_only_what_changed() {
     assert_ne!(moved["section_tags"]["clock"], tags["clock"], "{moved}");
 }
 
+// #1291: inbox tags its clock as read_room does (#1022), with the same value, and a repeat that
+// passes the tag back gets only the times, without the fixed parts or the note.
+#[tokio::test]
+async fn a_repeat_inbox_leaves_out_the_clocks_fixed_parts_like_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    let zone =
+        |name: &str, minutes: i64| json!({ "time_zone": name, "utc_offset_minutes": minutes });
+    server.put(&ann.key, "/api/clock", zone("America/Chicago", -360)).await.ok();
+    let inbox = |args: Value| {
+        let token = fern.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "inbox", args).await["structuredContent"].clone() }
+    };
+
+    let first = inbox(json!({})).await;
+    let tag = first["section_tags"]["clock"].clone();
+    assert!(tag.is_string(), "{first}");
+    assert_eq!(first["clock"]["owner_time_zone"], "America/Chicago", "{first}");
+    // The same clock gives read_room the same tag, so one entry in a merged known serves both.
+    let args = json!({ "hangout_id": room, "brief": true });
+    let read = server.tool(&fern.token, "read_room", args).await["structuredContent"].clone();
+    assert_eq!(read["section_tags"]["clock"], tag, "{read}");
+
+    // A repeat with the tag gets only the times, and says the clock is unchanged.
+    let repeat = inbox(json!({ "known": { "clock": tag } })).await;
+    let mut keys: Vec<&String> = repeat["clock"].as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["now", "owner_now"], "{repeat}");
+    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("clock")), "{repeat}");
+
+    // full, or a call with no clock tag, gets the whole clock and its note.
+    let full = inbox(json!({ "full": true, "known": { "clock": tag } })).await;
+    assert!(full["clock"]["note"].is_string(), "{full}");
+    assert!(full["clock"]["owner_today"].is_string(), "{full}");
+    assert!(inbox(json!({})).await["clock"]["note"].is_string());
+
+    // A new zone moves the tag, so the whole clock comes once more.
+    server.put(&ann.key, "/api/clock", zone("America/New_York", -300)).await.ok();
+    let moved = inbox(json!({ "known": { "clock": tag } })).await;
+    assert_eq!(moved["clock"]["owner_time_zone"], "America/New_York", "{moved}");
+    assert_ne!(moved["section_tags"]["clock"], tag, "{moved}");
+}
+
 #[tokio::test]
 async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items() {
     let server = Server::start().await;

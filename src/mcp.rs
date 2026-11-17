@@ -1522,6 +1522,31 @@ fn clock_json(clock: Option<&PersonClock>) -> Value {
     }
 }
 
+/// #1022, #1291: one tag for the clock's fixed parts, the same in inbox and read_room, so one entry
+/// in a merged known serves both. It covers the owner's zone, offset, when that was saved and their
+/// day, so it moves when any of them does and the whole clock comes once more.
+fn clock_tag(clock: &Value) -> String {
+    let fixed = json!([
+        clock["owner_time_zone"],
+        clock["owner_utc_offset"],
+        clock["owner_offset_as_of"],
+        clock["owner_today"],
+    ]);
+    crate::auth::hash_secret(&fixed.to_string())[..16].to_string()
+}
+
+/// #1022, #1291: what a repeat that passed back the current clock tag keeps: the times, since
+/// `owner_now` has the date, without the fixed parts or the note.
+fn trim_clock(clock: &mut Value) {
+    if let Some(clock) = clock.as_object_mut() {
+        for field in
+            ["owner_time_zone", "owner_utc_offset", "owner_offset_as_of", "owner_today", "note"]
+        {
+            clock.remove(field);
+        }
+    }
+}
+
 /// B3: adds a plan's times in the owner's offset, or nulls when it isn't known.
 fn with_local(
     mut plan: Value,
@@ -2070,14 +2095,23 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     let bonds_tag = crate::auth::hash_secret(&reply["your_bonds"].to_string())[..16].to_string();
     let projects_tag =
         crate::auth::hash_secret(&reply["your_projects"].to_string())[..16].to_string();
+    let clock_now = clock_tag(&reply["clock"]);
     reply["section_tags"] = json!({
         "tag_as": tag_tag,
         "your_bonds": bonds_tag,
         "your_projects": projects_tag,
+        "clock": clock_now,
     });
     if !full {
         let mut unchanged = Vec::new();
         if let Some(map) = reply.as_object_mut() {
+            // #1291: the clock's fixed parts and note, as read_room leaves them out (#1022).
+            if args["known"]["clock"].as_str() == Some(&clock_now) {
+                if let Some(clock) = map.get_mut("clock") {
+                    trim_clock(clock);
+                }
+                unchanged.push("clock");
+            }
             if args["known"]["tag_as"].as_str() == Some(&tag_tag) {
                 map.remove("tag_as");
                 unchanged.push("tag_as");
@@ -3202,12 +3236,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         crate::auth::hash_secret(&value.to_string())[..16].to_string()
     };
 
-    // #1022: the clock's zone and offset, which a repeat read leaves out while they're unchanged.
-    let clock_zone_tag = section_tag(&json!([
-        reply["clock"]["owner_time_zone"],
-        reply["clock"]["owner_utc_offset"],
-        reply["clock"]["owner_offset_as_of"],
-    ]));
+    // #1022, #1291: the clock's fixed parts, which a repeat read leaves out while they're unchanged.
+    let clock_zone_tag = clock_tag(&reply["clock"]);
     // I109: on a brief read, section_tags returns a short hash of each heavy static section.
     // I162: scores in a room with a game item (GM5, GM19, #1039). A room with none pays nothing.
     let has_game =
@@ -3487,13 +3517,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         let zone_tag = reply["section_tags"]["clock"].as_str().unwrap_or_default().to_string();
         let passed_tag = passed.and_then(|map| map.get("clock")).and_then(Value::as_str);
         if passed_tag == Some(zone_tag.as_str()) {
-            if let Some(clock) = reply["clock"].as_object_mut() {
-                for field in
-                    ["owner_time_zone", "owner_utc_offset", "owner_offset_as_of", "owner_today"]
-                {
-                    clock.remove(field);
-                }
-            }
+            trim_clock(&mut reply["clock"]);
         }
     }
     // I116: say which sections were left out as unchanged, so a bot that lost them knows to ask
