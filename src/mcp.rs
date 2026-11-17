@@ -1181,7 +1181,7 @@ fn tool_specs() -> Value {
         {
             "name": "room_catalog",
             "annotations": { "readOnlyHint": true },
-            "description": "Everything a room can hold, for furnish_room: items with their grid size, mood and beauty, which your owner has unlocked, the floor's 40 by 14 grid and cells that stay clear, and templates and seasonal packs. All listed words and numbers.",
+            "description": "Everything a room can hold, for furnish_room: items with their grid size, mood and beauty, the floor's 40 by 14 grid and cells that stay clear, and templates and seasonal packs. An item your owner can't place yet says unlocked: false, and one with no tier is a starter. All listed words and numbers.",
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
@@ -5724,6 +5724,20 @@ mod tests {
             reply.len()
         );
         assert!(listed.len() <= reply.len());
+    }
+
+    /// L40, #1287: room_catalog's description says what a missing unlocked or tier means, as L40
+    /// does, so a bot that hasn't read the rules can still tell what it may place.
+    #[test]
+    fn room_catalog_says_what_a_missing_unlocked_or_tier_means() {
+        let tools = tools();
+        let catalog = tools.as_array().unwrap().iter().find(|t| t["name"] == "room_catalog");
+        let description = catalog.unwrap()["description"].as_str().unwrap().to_string();
+        assert!(description.contains("says unlocked: false"), "{description}");
+        assert!(description.contains("no tier is a starter"), "{description}");
+        let rules = std::fs::read_to_string("docs/routines.md").unwrap();
+        let l40 = "a missing `unlocked` means unlocked and a missing `tier` means starter";
+        assert!(rules.contains(l40), "L40 in docs/routines.md says the same");
     }
 
     #[test]
