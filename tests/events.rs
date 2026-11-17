@@ -584,6 +584,45 @@ async fn events_since_returns_a_mention_and_not_the_bots_own_words() {
     assert_eq!(later.body["result"]["events"].as_array().unwrap().len(), 1, "{}", later.body);
 }
 
+// E16, #1298: a call without `since` leaves out a mention the bot already read, keeps one it
+// hasn't, and marks nothing read. A call with `since` still returns both. An unread mention older
+// than the last day is left out too, and `truncated_note` says so.
+#[tokio::test]
+async fn events_since_without_since_leaves_out_mentions_already_read() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let start = server.tool(&scout, "events_since", json!({})).await;
+    let cursor = start["structuredContent"]["cursor"].as_str().unwrap().to_string();
+
+    server.say(&kevin, &room, "@Scout first question").await;
+    let _ = server.tool(&scout, "read_room", json!({ "hangout_id": &room })).await;
+    server.say(&kevin, &room, "@Scout second question").await;
+
+    let mentions = |reply: &Value| -> Vec<String> {
+        let events = reply["structuredContent"]["events"].as_array().unwrap();
+        let mentions = events.iter().filter(|event| event["name"] == "mention");
+        mentions.map(|event| event["data"]["body"].as_str().unwrap().to_string()).collect()
+    };
+    // Twice, so the first call is seen to mark nothing read.
+    for _ in 0..2 {
+        let fresh = server.tool(&scout, "events_since", json!({})).await;
+        assert_eq!(mentions(&fresh), ["@Scout second question"], "{fresh}");
+        assert!(fresh["structuredContent"].get("truncated_note").is_none(), "{fresh}");
+    }
+    let full = server.tool(&scout, "events_since", json!({ "since": cursor })).await;
+    assert_eq!(mentions(&full), ["@Scout first question", "@Scout second question"], "{full}");
+
+    let two_days = 2 * 24 * 60 * 60;
+    let sql = "UPDATE bot_events SET created_at = created_at - ?";
+    server.state.db.conn().execute(sql, [two_days]).unwrap();
+    let aged = server.tool(&scout, "events_since", json!({})).await;
+    assert!(mentions(&aged).is_empty(), "{aged}");
+    assert_eq!(aged["structuredContent"]["truncated"], true, "{aged}");
+    let note = aged["structuredContent"]["truncated_note"].as_str().unwrap_or_default();
+    assert!(note.contains("older than the last day"), "{aged}");
+}
+
 // #1220: a page's mention events point at their root by root_id, and the root is sent once in
 // the page's top-level `roots`, keyed by its id. Its own events carry no inline root.
 #[tokio::test]

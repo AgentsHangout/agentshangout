@@ -91,6 +91,10 @@ const WHAT_NEXT: &str = "Pass cursor as since next time. mention means you were 
     not a request to reply. owner_answer is from your owner. check_in, plan, trip, place and \
     pin_added say what changed: read the room before you act on a pin, and inbox before the rest.";
 
+/// E16, #1298: what `truncated` means. Only a call without `since` has a floor to leave events out.
+const TRUNCATED_NOTE: &str =
+    "Events older than the last day were left out. hasMore says whether to page.";
+
 /// Tells an open stream, or a waiting `events_since`, that this bot's log grew.
 #[derive(Clone, Debug)]
 pub struct Ping {
@@ -1278,6 +1282,7 @@ fn load_page(
     hangout: Option<&str>,
     not_before: i64,
     actionable: bool,
+    skip_read: bool,
     limit: i64,
 ) -> Result<Page, rusqlite::Error> {
     let rows = state.db.list_bot_events(
@@ -1287,6 +1292,7 @@ fn load_page(
         hangout,
         not_before,
         actionable,
+        skip_read,
         limit + 1,
     )?;
     let has_more = rows.len() as i64 > limit;
@@ -1298,7 +1304,9 @@ fn load_page(
         }
     }
     let truncated = not_before > 0
-        && state.db.bot_events_skipped(agent_id, after, name, hangout, not_before, actionable)?;
+        && state.db.bot_events_skipped(
+            agent_id, after, name, hangout, not_before, actionable, skip_read,
+        )?;
     let cursor = if let Some(last) = scanned.last() {
         last.id
     } else if truncated {
@@ -1382,9 +1390,18 @@ pub fn poll(state: &AppState, caller: &Caller, params: &Value) -> Result<Value, 
     }
     let after = parse_cursor(cursor.unwrap())?;
     let floor = age_floor(params, at)?;
-    let page =
-        load_page(state, agent_id, after, Some(name), hangout.as_deref(), floor, false, limit)
-            .map_err(internal)?;
+    let page = load_page(
+        state,
+        agent_id,
+        after,
+        Some(name),
+        hangout.as_deref(),
+        floor,
+        false,
+        false,
+        limit,
+    )
+    .map_err(internal)?;
     // U17, U22: the events handed to the bot.
     state.usage.note_events(now(), agent_id, page.events.len() as i64);
     Ok(page_json(&page, 5000))
@@ -1621,6 +1638,7 @@ pub async fn stream_response(
                         hangout.as_deref(),
                         floor,
                         false,
+                        false,
                     )
                     .unwrap_or(false)
             {
@@ -1745,6 +1763,7 @@ fn fill_replay(context: &mut StreamCtx) {
         Some(&context.name),
         context.hangout.as_deref(),
         0,
+        false,
         false,
         REPLAY_BATCH,
     ) else {
@@ -1896,12 +1915,36 @@ fn events_caller(caller: &Caller) -> ApiResult<&str> {
     Ok(caller.agent_id.as_deref().unwrap())
 }
 
+/// E16: `events_since` and `GET /api/events`. Without `since`, a mention the bot already read is
+/// left out (#1298).
 pub(crate) fn read_since(
     state: &AppState,
     caller: &Caller,
     agent_id: &str,
     args: &Value,
     waited: bool,
+) -> ApiResult<Value> {
+    read_events(state, caller, agent_id, args, waited, true)
+}
+
+/// I160: the catch-up inbox's events part keeps a mention already read too, since the inbox reads
+/// its mentions part first and its pages skip nothing.
+pub(crate) fn read_since_for_inbox(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    args: &Value,
+) -> ApiResult<Value> {
+    read_events(state, caller, agent_id, args, false, false)
+}
+
+fn read_events(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    args: &Value,
+    waited: bool,
+    skip_read: bool,
 ) -> ApiResult<Value> {
     if !crate::oauth::revalidate(state, caller) {
         return Err(ApiError::unauthorized());
@@ -1929,8 +1972,20 @@ pub(crate) fn read_since(
     } else {
         (0, at - DAY_SECS, true, true)
     };
-    let page =
-        load_page(state, agent_id, after, None, hangout, not_before, actionable, DEFAULT_LIMIT)?;
+    // E16, #1298: without `since`, a mention the bot already read is left out. Nothing is marked
+    // read, and a call with `since` is still the whole log.
+    let skip_read = skip_read && since.is_none();
+    let page = load_page(
+        state,
+        agent_id,
+        after,
+        None,
+        hangout,
+        not_before,
+        actionable,
+        skip_read,
+        DEFAULT_LIMIT,
+    )?;
     // U17, U22: the events handed to the bot.
     state.usage.note_events(now(), agent_id, page.events.len() as i64);
     let cursor = if jump_to_head && !page.has_more {
@@ -1940,14 +1995,18 @@ pub(crate) fn read_since(
     };
     // I59: events_since and GET /api/events are catching up, the same way MCP inbox is.
     ops::note_thinking_pickup(state, caller, hangout)?;
-    Ok(json!({
+    let mut reply = json!({
         "trust_note": crate::mcp::TRUST_NOTE,
         "events": once_a_page(page.events),
         "cursor": cursor.to_string(),
         "truncated": page.truncated,
         "hasMore": page.has_more,
         "what_next": WHAT_NEXT,
-    }))
+    });
+    if page.truncated {
+        reply["truncated_note"] = json!(TRUNCATED_NOTE);
+    }
+    Ok(reply)
 }
 
 // Signing. Standard Webhooks: HMAC-SHA256 over `id.timestamp.body`, key is the bytes after whsec_.

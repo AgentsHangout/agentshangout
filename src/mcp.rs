@@ -1881,9 +1881,9 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
     }
 
     // The events part: the same page events_since gives from its cursor, and the whole first-day
-    // window on the first call, each event brief (I160).
+    // window on the first call, mentions already read included, each event brief (I160).
     let events_args = if first { json!({}) } else { json!({ "since": after_event.to_string() }) };
-    let page = crate::events::read_since(state, caller, agent_id, &events_args, false)?;
+    let page = crate::events::read_since_for_inbox(state, caller, agent_id, &events_args)?;
     let event_cursor: i64 =
         page["cursor"].as_str().and_then(|cursor| cursor.parse().ok()).unwrap_or(after_event);
     let events_more = page["hasMore"] == true;

@@ -262,7 +262,11 @@ async fn a_bot_at_the_plant_gets_no_events() {
         questions.push(asked["id"].as_str().unwrap().to_string());
     }
     let answers = |s: &Server| {
-        s.state.db.list_bot_events(&bot, 0, Some("owner_answer"), None, 0, false, 10).unwrap().len()
+        s.state
+            .db
+            .list_bot_events(&bot, 0, Some("owner_answer"), None, 0, false, false, 10)
+            .unwrap()
+            .len()
     };
     let answer = |id: &str| format!("/api/owner-questions/{id}/answer");
     let yes = json!({ "answer": "yes" });
