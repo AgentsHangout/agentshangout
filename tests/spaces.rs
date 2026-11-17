@@ -221,6 +221,22 @@ impl Server {
         self.get(who, &format!("/api/hangouts/{room}")).await
     }
 
+    /// R14, #1245: a guest's reads leave out the second they arrived, in whole seconds, and a fixed
+    /// sleep isn't enough where the wall clock can step back. So this waits until the clock is past
+    /// the arrival second the server stored for this guest, checking every 50 ms, for at most 3 s.
+    async fn past_arrival_second(&self, guest: &Who, room: &str) {
+        let seen = self.snapshot(&guest.key, room).await.ok();
+        let since =
+            seen["guest"]["since"].as_i64().unwrap_or_else(|| panic!("not a guest: {seen}"));
+        for _ in 0..60 {
+            if now() > since {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the clock didn't pass the guest's arrival second {since} in 3 s: it's {}", now());
+    }
+
     async fn stream(&self, token: &str, room: &str) -> reqwest::Response {
         let stream = self
             .client
@@ -1120,7 +1136,7 @@ async fn a_name_at_a_public_floors_door_makes_an_account_and_walks_it_in() {
 
     // A walk-in like any other (S18, S19): no member, and nothing from before they came.
     assert!(!server.state.db.is_member(&room, &cleo.id).unwrap());
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    server.past_arrival_second(&cleo, &room).await;
     server.say(&ann.key, &room, "hello everyone").await.ok();
     let seen = server.snapshot(&cleo.key, &room).await.ok();
     assert!(!seen.to_string().contains("secret plan"), "{seen}");
@@ -1343,7 +1359,7 @@ async fn opening_a_floor_shows_nobody_what_was_said_before() {
     let (_, stranger) = server.someone("Stranger").await;
     server.walk_in(&stranger, &room).await.ok();
     // Times are whole seconds, and a guest's reads leave out the second they arrived.
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    server.past_arrival_second(&stranger, &room).await;
     server.say(&ann.key, &room, "hello everyone").await.ok();
 
     let seen = server.snapshot(&stranger.key, &room).await.ok();
@@ -1396,7 +1412,7 @@ async fn nothing_on_a_public_floor_repeats_a_plan_or_a_check_in_in_chat() {
     server.open(&ann, &room).await;
     let (_, stranger) = server.someone("Stranger").await;
     server.walk_in(&stranger, &room).await.ok();
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    server.past_arrival_second(&stranger, &room).await;
 
     let plan = json!({ "title": "Quiet tacos", "starts_at": LATER, "min_yes": 1 });
     server.post(&ann.key, &format!("/api/hangouts/{room}/events"), plan).await.ok();
@@ -1461,7 +1477,7 @@ async fn walking_in_again_adds_time_and_keeps_your_place_in_the_floors_history()
     assert!(first["until"].as_i64().unwrap() >= now() + spaces::WALK_IN_SECS - 2);
     let since = server.snapshot(&stranger.key, &room).await.ok()["guest"]["since"].clone();
 
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    server.past_arrival_second(&stranger, &room).await;
     server.walk_in(&stranger, &room).await.ok();
     assert_eq!(server.snapshot(&stranger.key, &room).await.ok()["guest"]["since"], since);
 
