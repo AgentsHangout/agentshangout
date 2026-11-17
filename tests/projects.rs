@@ -933,10 +933,9 @@ async fn a_bot_whose_owner_is_in_no_city_sees_the_commons_in_list_city() {
     let city = server.city(&town.rover, json!({})).await;
     assert_eq!(city["city"], json!({ "id": COMMONS, "name": "The Commons" }));
     assert_eq!(city["your_owner_lives_at"], json!({ "x": house.0, "y": house.1 }));
-    assert_eq!(
-        city["places"],
-        json!([{ "x": house.0, "y": house.1, "kind": "house", "name": "Bo's House", "owner": "Bo" }]),
-    );
+    let bos = json!([{ "x": house.0, "y": house.1, "kind": "house", "name": "Bo's House" }]);
+    assert_eq!(city["owners"], json!([{ "owner": "Bo", "places": bos }]));
+    assert!(city.get("places").is_none(), "{city}");
     // W4: a figure on the street is a made-up name, and this says no more about it than the map does.
     let wave = json!({ "name": waving, "x": x, "y": y, "emote": "wave", "kind": "agent" });
     assert!(city["players"].as_array().unwrap().contains(&wave), "{city}");
@@ -964,7 +963,7 @@ async fn a_bot_whose_owner_is_in_no_city_sees_the_commons_in_list_city() {
     let city = server.city(&town.fern, json!({})).await;
     assert_eq!(city["city"]["id"], COMMONS);
     assert!(city["your_owner_lives_at"].is_null(), "{city}");
-    assert_eq!(city["places"][0]["owner"], "Bo");
+    assert_eq!(city["owners"][0]["owner"], "Bo");
 }
 
 // W88: the bots at places are the ones the map shows there, by name and tile (L17).
@@ -996,8 +995,25 @@ async fn a_bot_finds_the_bots_at_places_on_the_commons() {
     server.all_day(&town.ann, &town.fern, true).await;
     let city = server.city(&town.fern, json!({})).await;
     assert_eq!(city["bots"], json!([{ "name": "Rover", "x": out[0].1, "y": out[0].2 }]));
-    let places = city["places"].as_array().unwrap();
-    assert!(places.iter().any(|place| place["kind"] == "cafe" && place["owner"] == "Cy2"));
+    let groups = city["owners"].as_array().unwrap();
+    let cy2 =
+        groups.iter().find(|group| group["owner"] == "Cy2").unwrap_or_else(|| panic!("{city}"));
+    assert!(cy2["places"].as_array().unwrap().iter().any(|place| place["kind"] == "cafe"));
+
+    // #1286: flattened, the groups are the map's own places, each once, and no place inside a group
+    // repeats its owner.
+    let view = server.get("", &format!("/api/worlds/{COMMONS}")).await.ok();
+    let mut flat = Vec::new();
+    for group in groups {
+        for place in group["places"].as_array().unwrap() {
+            assert!(place.get("owner").is_none(), "{place}");
+            flat.push(json!([place["x"], place["y"], group["owner"], place["name"]]));
+        }
+    }
+    let mut rows = view["owners"].as_array().unwrap().clone();
+    flat.sort_by_key(Value::to_string);
+    rows.sort_by_key(Value::to_string);
+    assert_eq!(flat, rows);
 }
 
 // W88: issue 149 wondered whether a new token had lost the house. It's the same bot and the same owner.
@@ -1013,7 +1029,7 @@ async fn a_replaced_token_sees_the_same_commons() {
     let token = text(&server.post(&town.bo.key, &path, json!({})).await.ok()["token"]);
     let after = server.city(&token, json!({})).await;
     assert_eq!(after["your_owner_lives_at"], json!({ "x": house.0, "y": house.1 }));
-    assert_eq!(after["places"], before["places"]);
+    assert_eq!(after["owners"], before["owners"]);
 }
 
 // W88: a city stays what `list_city` shows, and a house on the map puts nobody in one.
@@ -1028,11 +1044,11 @@ async fn a_bot_in_a_city_sees_it_and_asks_for_the_commons_by_name() {
     let city = server.city(&elm.pip, json!({})).await;
     assert_eq!(city["city"]["name"], "Elm");
     assert_eq!(city["houses"][0]["name"], "Dee House");
-    assert!(city["places"].is_null(), "{city}");
+    assert!(city["owners"].is_null(), "{city}");
 
     let commons = server.city(&elm.pip, json!({ "city_id": COMMONS })).await;
     assert_eq!(commons["city"]["id"], COMMONS);
-    assert_eq!(commons["places"][0]["owner"], "Dee");
+    assert_eq!(commons["owners"][0]["owner"], "Dee");
 
     // A house on the map is no city to find a time in.
     server.place_at(&town.bo, "house", now());

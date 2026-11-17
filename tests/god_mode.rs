@@ -1947,10 +1947,13 @@ async fn map_places_carry_the_id_of_their_public_floor_and_private_ones_carry_no
     server.all_day(&bo, &rover_id, true).await;
 
     let city = server.tool(&rover, "list_city", json!({})).await;
-    let places = city["places"].as_array().unwrap();
+    let groups = city["owners"].as_array().unwrap();
+    let places: Vec<&Value> =
+        groups.iter().flat_map(|group| group["places"].as_array().unwrap()).collect();
     let at = |(x, y): (i64, i64)| {
         places
             .iter()
+            .copied()
             .find(|place| place["x"] == x && place["y"] == y)
             .unwrap_or_else(|| panic!("{city}"))
     };

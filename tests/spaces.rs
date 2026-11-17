@@ -4893,10 +4893,11 @@ async fn an_owners_quiet_public_studio_stays_in_public_floors_and_list_city_past
     assert!(bot_ids.contains(&studio), "owner's studio missing from public_floors: {bot_ids:?}");
 
     let city = call("list_city", json!({})).await;
-    let at_spot = city["places"]
+    let at_spot = city["owners"]
         .as_array()
         .unwrap()
         .iter()
+        .flat_map(|group| group["places"].as_array().unwrap())
         .find(|p| p["x"] == spot.0 && p["y"] == spot.1)
         .unwrap_or_else(|| panic!("{city}"));
     assert_eq!(at_spot["floor_id"], studio.as_str(), "{at_spot}");

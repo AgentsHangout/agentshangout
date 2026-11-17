@@ -2808,23 +2808,31 @@ pub fn commons_for_bot(state: &AppState, owner_id: &str) -> ApiResult<Value> {
         rows("tiles").iter().map(|tile| ((tile[0].as_i64(), tile[1].as_i64()), &tile[2])).collect();
     let house = state.db.house_of_person(COMMONS_ID, owner_id)?;
     let doors = crate::spaces::public_floor_doors(state, owner_id)?;
+    // #1286: places under their owner, so a name that owns many is said once. Groups come in the
+    // order of each owner's first place, and places keep the map's order inside them.
+    let mut owners: Vec<(&Value, Vec<Value>)> = Vec::new();
+    for row in rows("owners") {
+        let mut place = json!({
+            "x": row[0],
+            "y": row[1],
+            "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
+            "name": row[3],
+        });
+        // W105: only for a public floor the owner can already see in public_floors.
+        let at = (row[0].as_i64().unwrap_or(-1), row[1].as_i64().unwrap_or(-1));
+        if let Some(id) = doors.get(&at) {
+            place["floor_id"] = json!(id);
+        }
+        match owners.iter_mut().find(|(owner, _)| *owner == &row[2]) {
+            Some((_, places)) => places.push(place),
+            None => owners.push((&row[2], vec![place])),
+        }
+    }
     Ok(json!({
         "city": { "id": COMMONS_ID, "name": COMMONS_NAME },
         "your_owner_lives_at": house.map(|(x, y)| json!({ "x": x, "y": y })),
-        "places": rows("owners").iter().map(|row| {
-            let mut place = json!({
-                "x": row[0],
-                "y": row[1],
-                "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
-                "name": row[3],
-                "owner": row[2],
-            });
-            // W105: only for a public floor the owner can already see in public_floors.
-            let at = (row[0].as_i64().unwrap_or(-1), row[1].as_i64().unwrap_or(-1));
-            if let Some(id) = doors.get(&at) {
-                place["floor_id"] = json!(id);
-            }
-            place
+        "owners": owners.into_iter().map(|(owner, places)| {
+            json!({ "owner": owner, "places": places })
         }).collect::<Vec<_>>(),
         "bots": rows("bots_out").iter().map(|row| json!({
             "name": row[0],
