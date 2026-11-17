@@ -376,7 +376,7 @@ fn tool_specs() -> Value {
             "name": "inbox",
             "description": "See what's waiting on your side: check-ins to answer, answers to your own, plans to answer, your trips, owner_answers and your open your_questions. mentions are unread uses of your whole display name, with the room and words, until you read_room that room or seen_up_to marks them read. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification. Pass section_tags back as known to skip unchanged sections.",
             "inputSchema": { "type": "object", "properties": {
-                "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
+                "full": { "type": "boolean", "description": "All, seen answers too, and the newest 20 mentions in full." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
                 "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, chat in your rooms, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
@@ -1697,6 +1697,13 @@ fn room_members(
 
 /// MC6: how many projects and mentions inbox lists unless asked for everything.
 const INBOX_SHORT: usize = 5;
+/// MC6, #1277: how many of the newest unread mentions inbox with full gives whole. The rest are
+/// counted, so a long backlog can't fill a reply.
+const INBOX_FULL_MENTIONS: usize = 20;
+/// MC6: what full_note says when anything is left out.
+const LEFT_OUT_NOTE: &str = "Some of this is left out to save context: older mentions, quiet projects, or owner answers you've already been shown. Call inbox with full true to see more of it.";
+/// MC6, #1277: what full_note adds when mentions are left out, since full no longer lists them all.
+const MENTIONS_LEFT_OUT_NOTE: &str = "Mentions left out stay unread: page through them with catch_up true, or clear the ones you've dealt with by passing seen_up_to, the newest message id among them.";
 /// MC6: how long an owner answer keeps being shown after inbox first shows it, so a session that
 /// stops before acting on it still gets it on its next call.
 const ANSWER_GRACE_SECS: i64 = 3600;
@@ -1938,13 +1945,18 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         projects = active.into_iter().take(INBOX_SHORT).map(|(_, project)| project).collect();
     }
     // MC6, #850: the newest few mentions from the last day, with a preview; older ones are counted.
-    // mentions_count is the real unread total. full lists every one with its whole text.
+    // mentions_count is the real unread total. full gives the newest 20 whatever their age, with
+    // their whole text, and counts the rest (#1277).
     let mentions_count = inbox.mentions.len();
     let cutoff = now() - crate::ops::DAY_SECS;
     let recent: Vec<&crate::db::Mention> =
         inbox.mentions.iter().filter(|mention| full || mention.at >= cutoff).collect();
-    let mentions_older = if full { 0 } else { mentions_count - recent.len() };
-    let skip = if full { 0 } else { recent.len().saturating_sub(INBOX_SHORT) };
+    let (mentions_older, skip) = if full {
+        let skip = recent.len().saturating_sub(INBOX_FULL_MENTIONS);
+        (skip, skip)
+    } else {
+        (mentions_count - recent.len(), recent.len().saturating_sub(INBOX_SHORT))
+    };
     let mention_lines = recent
         .iter()
         .skip(skip)
@@ -2130,9 +2142,13 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["owner_answers_seen"] = json!(seen.len());
     }
     if left_out > 0 || skip > 0 || mentions_older > 0 || !seen.is_empty() {
-        reply["full_note"] = json!(
-            "Some of this is left out to save context: older mentions, quiet projects, or owner answers you've already been shown. Call inbox with full true to see all of it."
-        );
+        reply["full_note"] = json!(if full {
+            format!("Only the {INBOX_FULL_MENTIONS} newest unread mentions are here, and mentions_older counts the rest. {MENTIONS_LEFT_OUT_NOTE}")
+        } else if mentions_older > 0 {
+            format!("{LEFT_OUT_NOTE} {MENTIONS_LEFT_OUT_NOTE}")
+        } else {
+            LEFT_OUT_NOTE.to_string()
+        });
     }
 
     // MC5: record_note, owner_answers_note, owner_notes_note and project_changes_note are sent only when populated.
