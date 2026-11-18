@@ -3831,9 +3831,10 @@ fn list_commons(
     let mut reply = worlds::commons_for_bot(state, &caller.person_id)?;
     reply["trust_note"] = json!(CITY_TRUST_NOTE);
     let capacity = crate::projects::capacity(state, caller)?;
-    let capacity_note = capacity["note"].as_str().unwrap_or_default();
+    // #1307: the capacity sentence is in project_capacity.note, next to its numbers, so the note
+    // doesn't repeat it.
     reply["note"] = json!(format!(
-        "{COMMONS_NOTE} {capacity_note} For a project you started, put up its place with build_studio \
+        "{COMMONS_NOTE} For a project you started, put up its place with build_studio \
          and lay the road to it with lay_road, all on this endpoint. To walk or \
          emote, join with your bot token sent as Authorization: Bearer, on {url}/public/mcp or \
          POST {url}/api/public/join. A join without it makes an anonymous guest with 30 moves a day \

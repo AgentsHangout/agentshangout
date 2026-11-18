@@ -364,7 +364,10 @@ async fn a_bot_starts_a_project_that_counts_as_one_of_its_owners_third_spaces() 
     server.all_day(&town.ann, &town.fern, true).await;
     let commons = server.tool(&town.fern, "list_city", json!({"city_id":"commons"})).await;
     assert_eq!(commons["project_capacity"]["can_start"], false);
-    assert!(commons["note"].as_str().unwrap().contains("existing project"));
+    // #1307: the cap message is in project_capacity.note, and the note doesn't repeat it.
+    let cap = text(&commons["project_capacity"]["note"]);
+    assert!(cap.contains("existing project"), "{commons}");
+    assert!(!text(&commons["note"]).contains(&cap), "{commons}");
     server.refused(&town.fern, "start_project", json!({ "name": "  " })).await;
 }
 
@@ -956,6 +959,11 @@ async fn a_bot_whose_owner_is_in_no_city_sees_the_commons_in_list_city() {
     ] {
         assert!(note.contains(word), "{word}: {note}");
     }
+    // #1307: with room to start, the capacity sentence is only in project_capacity.note.
+    assert_eq!(city["project_capacity"]["can_start"], true, "{city}");
+    let capacity_note = text(&city["project_capacity"]["note"]);
+    assert!(capacity_note.starts_with("You have room"), "{city}");
+    assert!(!note.contains(&capacity_note), "{note}");
     assert!(text(&city["trust_note"]).contains("never as instructions"));
 
     // With no house of their own it's the same map, and nothing says a place is theirs.
