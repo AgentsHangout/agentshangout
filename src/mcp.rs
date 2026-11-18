@@ -3649,9 +3649,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
 /// I104: reads one conversation thread: the root chat line and its replies, oldest first.
 fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let hangout = resolve_hangout(state, caller, args)?;
-    let root_id = args["root"]
-        .as_i64()
-        .ok_or_else(|| ApiError::bad_request("root message id is required"))?;
+    // #1305: the refusal names the key, and a near miss when the call used one.
+    let root_id = args["root"].as_i64().ok_or_else(|| {
+        let plain = "root is required: the root message id, from read_room";
+        let near = ["message_id", "root_id", "id"].into_iter().find(|key| !args[*key].is_null());
+        ApiError::bad_request(match near {
+            Some(key) => format!("{plain} (got {key}; use root)"),
+            None => plain.to_string(),
+        })
+    })?;
     let mut root = state.db.message(root_id)?.ok_or_else(ApiError::not_found)?;
     if root.hangout_id != hangout.id {
         return Err(ApiError::not_found());

@@ -10629,6 +10629,26 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
     );
 }
 
+// I104, #1305: a read_thread without root says root is required, and names a near-miss key the
+// call used instead.
+#[tokio::test]
+async fn read_thread_without_root_names_the_key() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let refusal = |reply: &Value| {
+        assert_eq!(reply["isError"], true, "{reply}");
+        reply["content"][0]["text"].as_str().unwrap_or_default().to_string()
+    };
+    let args = json!({ "hangout_id": room, "message_id": 1 });
+    let near = refusal(&server.tool(&scout.token, "read_thread", args).await);
+    assert!(near.starts_with("root is required"), "{near}");
+    assert!(near.contains("got message_id; use root"), "{near}");
+    let args = json!({ "hangout_id": room });
+    let plain = refusal(&server.tool(&scout.token, "read_thread", args).await);
+    assert_eq!(plain, "root is required: the root message id, from read_room");
+}
+
 #[tokio::test]
 async fn threads_active_root_older_than_snapshot_window_retained_in_read_room() {
     let server = Server::start().await;
