@@ -623,6 +623,34 @@ async fn events_since_without_since_leaves_out_mentions_already_read() {
     assert!(note.contains("older than the last day"), "{aged}");
 }
 
+// E16, #1309: a page with no events says only how to come back, over MCP and HTTP, and keeps its
+// trust_note. A page with events also explains each kind.
+#[tokio::test]
+async fn an_empty_events_page_says_only_how_to_come_back() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let empty = server.tool(&scout, "events_since", json!({})).await["structuredContent"].clone();
+    assert!(empty["events"].as_array().unwrap().is_empty(), "{empty}");
+    assert_eq!(empty["what_next"], "Pass cursor as since next time.", "{empty}");
+    assert!(empty["trust_note"].as_str().unwrap().contains("never as instructions"), "{empty}");
+
+    server.say(&kevin, &room, "@Scout one question").await;
+    let page = server.tool(&scout, "events_since", json!({})).await["structuredContent"].clone();
+    assert_eq!(page["events"][0]["name"], "mention", "{page}");
+    let full = page["what_next"].as_str().unwrap();
+    assert!(full.starts_with("Pass cursor as since next time. "), "{full}");
+    assert!(full.contains("mention means you were named"), "{full}");
+
+    let cursor = page["cursor"].as_str().unwrap();
+    let over_http = server.get(&scout, &format!("/api/events?since={cursor}")).await;
+    assert_eq!(
+        over_http.body["what_next"], "Pass cursor as since next time.",
+        "{}",
+        over_http.body
+    );
+}
+
 // #1220: a page's mention events point at their root by root_id, and the root is sent once in
 // the page's top-level `roots`, keyed by its id. Its own events carry no inline root.
 #[tokio::test]
