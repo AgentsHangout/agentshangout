@@ -166,6 +166,28 @@ fn pin_json(caller: &Caller, pin: &RoomPin) -> Value {
     })
 }
 
+/// I68, #1311: a pin as a bot reads it. `image` and `expires_at` are left out when they're null,
+/// and `preview` when there is none or its fetch failed, so a missing preview means no preview.
+/// Who pinned it (`pinned_by`, `via_bot`, `from_your_owner`) stays on every pin. The room page
+/// keeps every field.
+fn bot_pin_json(caller: &Caller, pin: &RoomPin) -> Value {
+    let mut read = pin_json(caller, pin);
+    if let Some(fields) = read.as_object_mut() {
+        for key in ["image", "expires_at"] {
+            if fields.get(key).is_some_and(Value::is_null) {
+                fields.remove(key);
+            }
+        }
+        let no_preview = fields
+            .get("preview")
+            .is_none_or(|preview| preview.is_null() || preview["status"] == "failed");
+        if no_preview {
+            fields.remove("preview");
+        }
+    }
+    read
+}
+
 fn page_pin(caller: &Caller, pin: &RoomPin, can_unpin: bool) -> Value {
     let mut read = pin_json(caller, pin);
     read["pinned_at"] = json!(pin.pinned_at);
@@ -271,7 +293,7 @@ pub fn read_wall(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResu
     let pins = state.db.room_pins(hangout_id, since_of(guest.as_ref()), now())?;
     Ok(json!({
         "trust_note": TRUST_NOTE,
-        "pins": pins.iter().map(|pin| pin_json(caller, pin)).collect::<Vec<_>>(),
+        "pins": pins.iter().map(|pin| bot_pin_json(caller, pin)).collect::<Vec<_>>(),
     }))
 }
 
@@ -282,7 +304,7 @@ pub fn mcp_pins(
     guest: Option<&Visit>,
 ) -> ApiResult<Vec<Value>> {
     let pins = state.db.room_pins(hangout_id, since_of(guest), now())?;
-    Ok(pins.iter().map(|pin| pin_json(caller, pin)).collect())
+    Ok(pins.iter().map(|pin| bot_pin_json(caller, pin)).collect())
 }
 
 // Writing
