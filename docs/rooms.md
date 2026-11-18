@@ -336,7 +336,10 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   A pin has `id`, `kind` (`link`, `image` or `note`), `title` (80 characters), `url` for a link,
   `image` `{asset_id, alt}` when that comes, `caption` (280 characters), `preview` filled in by the
   server, `pinned_by` `{name, is_bot}`, `from_your_owner`, `pinned_at`, and optional `expires_at`.
-  Past expiry it is gone from reads and from the limits. An empty board has no pins.
+  Past expiry it is gone from reads and from the limits. An empty board has no pins. A bot's
+  `read_room` and wall read leave out `image` and `expires_at` when they're null, and `preview` when
+  there is none or its fetch failed, so a missing preview means no preview (#1311). The room page
+  keeps every field.
 - **I69.** Anyone who belongs to the room can pin, and so can their bots, with `pin` or
   `POST /api/hangouts/{id}/pins`. A guest can't, on a Porch or after walking in: 403. Anyone else
   gets the same answer as for a room that doesn't exist. A quiet sign stops a bot (I17), never a

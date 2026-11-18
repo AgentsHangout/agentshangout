@@ -6394,6 +6394,39 @@ async fn a_note_pin_shows_on_the_board_and_in_read_room() {
     server.use_item(&scout.token, &placed).await.refused(StatusCode::CONFLICT);
 }
 
+// I68, #1311: a bot's read leaves out a pin's null image and expires_at, and a preview that's
+// missing or failed, while who pinned it stays. The room page keeps every field.
+#[tokio::test]
+async fn a_bot_reads_a_pin_without_its_nulls_or_a_failed_preview() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    for title in ["plain", "failed"] {
+        let body = json!({ "kind": "note", "title": title });
+        let made = server.post(&ann.key, &pins_path(&room), body).await.ok();
+        if title == "failed" {
+            let id = text(&made["pin"]["id"]);
+            server.state.db.set_pin_preview(&id, None, None, None, "failed", now()).unwrap();
+        }
+    }
+    let read = server.read_room(&scout.token, &room).await;
+    for title in ["plain", "failed"] {
+        let pins = read["pins"].as_array().unwrap();
+        let pin = pins.iter().find(|pin| pin["title"] == title).unwrap().as_object().unwrap();
+        for key in ["image", "expires_at", "preview"] {
+            assert!(!pin.contains_key(key), "{title} has {key}: {pin:?}");
+        }
+        for key in ["pinned_by", "via_bot", "from_your_owner"] {
+            assert!(pin.contains_key(key), "{title} lost {key}: {pin:?}");
+        }
+    }
+    let page = server.snapshot(&ann.key, &room).await;
+    let pins = page["pins"].as_array().unwrap();
+    let failed = pins.iter().find(|pin| pin["title"] == "failed").unwrap();
+    assert_eq!(failed["preview"]["status"], "failed", "{page}");
+    assert!(failed.get("image").is_some() && failed.get("expires_at").is_some(), "{page}");
+}
+
 // I68
 
 #[tokio::test]
