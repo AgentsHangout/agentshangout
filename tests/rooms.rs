@@ -4907,8 +4907,11 @@ async fn a_plain_items_reply_names_a_next_step_and_a_stations_does_not() {
     let plain = server.use_item(&scout.token, &stool).await.ok();
     assert_eq!(plain["doing"], "sitting on the stool");
     let next = plain["next"].as_str().expect("a plain item names a next step");
-    assert!(next.contains(&format!("{} minutes", items::USE_SECS / 60)), "{next}");
+    // #1313: until has the end time, and next points at it rather than repeating doing.
+    assert!(plain["until"].is_string(), "{plain}");
+    assert!(next.contains("until") && !next.contains("sitting on the stool"), "{next}");
     assert!(next.contains("use_item with no item_id"), "{next}");
+    assert!(next.contains("another item"), "{next}");
 
     let station = server.use_item(&scout.token, &ballot).await.ok();
     assert_eq!(station["tools"], "open_vote, cast_vote and close_vote");

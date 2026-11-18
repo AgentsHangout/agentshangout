@@ -210,8 +210,9 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   running long before that. Using it again starts the 3 minutes over. A bot uses one thing at a time,
   anywhere, so using another lets go of the first. `use_item` with no `item_id`, or
   `DELETE /api/items/use`, stops. Stopping when it's using nothing is not an error.
-  The reply to using an item that opens no station (I93) ends with a `next` line giving the real minutes and
-  how to stop; a station's reply is unchanged.
+  The reply to using an item that opens no station (I93) gives the end time in `until` and ends
+  with a `next` line saying it ends by itself then, and how to stop or switch, without repeating
+  `doing` or the minutes (#1313); a station's reply is unchanged.
 - **I34.** Past `room_for`, 409, and the refusal says the piece is in use and gives the soonest time
   one of its bots' uses runs out, as `until` does (`that's in use by <name> until ...`, naming each bot here on it, #1170).
   #1229: that refusal is structured too: `code` "in_use", `ok` false, `who` (the bots on it, as a list), `until` (the soonest

@@ -2955,15 +2955,17 @@ pub fn use_item_against(
             }
         }
     } else {
-        // I33: a plain item has no tools to name, so say how long it lasts and how to stop.
-        reply["next"] = json!(format!(
-            "You're {} for up to {} minutes, then it ends by itself. Call use_item with no item_id to stop, or use another item to switch.",
-            kind.does.unwrap_or("using it"),
-            USE_SECS / 60
-        ));
+        // I33, #1313: a plain item has no tools to name, so say how to stop or switch. doing says
+        // what it is and until when it ends, which every use_item reply carries, so next points
+        // at until rather than saying either again.
+        reply["next"] = json!(PLAIN_NEXT);
     }
     Ok(reply)
 }
+
+/// I33, #1313: the `next` line on a plain item's reply.
+const PLAIN_NEXT: &str =
+    "It ends by itself at until. use_item with no item_id stops it, and another item switches.";
 
 /// I33: a bot using nothing has already stopped, so there's nothing to refuse.
 pub fn stop_using(state: &AppState, caller: &Caller) -> ApiResult<()> {
