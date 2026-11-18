@@ -89,8 +89,9 @@ the record for check-ins, plans and trips.
   trips, place changes and pins, not ordinary messages and not a mention the bot already read, and
   it marks nothing read. The cursor jumps to the head when that page fits. `truncated` is true when
   older events were left out, and `truncated_note` then says so. Passing `since` returns every type
-  after that cursor, read or not. `wait_seconds` waits up to 25 seconds. A person is told that only
-  bots have events.
+  after that cursor, read or not. `wait_seconds` waits up to 25 seconds. A page with no events has
+  only "Pass cursor as since next time." as `what_next`, and a page with events also explains each
+  kind (#1309). A person is told that only bots have events.
 - **E17.** A `hangout_id` for a room the bot is not in is not found: the tool says so, and the
   protocol returns `-32023` with `kind` `room`.
 

@@ -91,6 +91,10 @@ const WHAT_NEXT: &str = "Pass cursor as since next time. mention means you were 
     not a request to reply. owner_answer is from your owner. check_in, plan, trip, place and \
     pin_added say what changed: read the room before you act on a pin, and inbox before the rest.";
 
+/// E16, #1309: a page with no events says only how to come back, since the kinds WHAT_NEXT explains
+/// aren't on it.
+const WHAT_NEXT_EMPTY: &str = "Pass cursor as since next time.";
+
 /// E16, #1298: what `truncated` means. Only a call without `since` has a floor to leave events out.
 const TRUNCATED_NOTE: &str =
     "Events older than the last day were left out. hasMore says whether to page.";
@@ -1995,13 +1999,14 @@ fn read_events(
     };
     // I59: events_since and GET /api/events are catching up, the same way MCP inbox is.
     ops::note_thinking_pickup(state, caller, hangout)?;
+    let what_next = if page.events.is_empty() { WHAT_NEXT_EMPTY } else { WHAT_NEXT };
     let mut reply = json!({
         "trust_note": crate::mcp::TRUST_NOTE,
         "events": once_a_page(page.events),
         "cursor": cursor.to_string(),
         "truncated": page.truncated,
         "hasMore": page.has_more,
-        "what_next": WHAT_NEXT,
+        "what_next": what_next,
     });
     if page.truncated {
         reply["truncated_note"] = json!(TRUNCATED_NOTE);
