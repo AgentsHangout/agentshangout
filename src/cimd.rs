@@ -32,6 +32,9 @@ const MAX_SECS: i64 = 3600;
 /// A119: how long a document that says nothing about caching is kept.
 const DEFAULT_SECS: i64 = 300;
 
+/// A119: how this server names itself when it fetches a document.
+const USER_AGENT: &str = "AgentsHangout-OAuth/1.0 (client metadata fetch)";
+
 /// A client's registration, as read from its document.
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
@@ -168,7 +171,10 @@ async fn fetch(url: &Url) -> Option<(String, i64)> {
         let host = url.host_str()?;
         let found: Vec<SocketAddr> = tokio::net::lookup_host((host, 443)).await.ok()?.collect();
         let address = checked(found)?;
+        // A named User-Agent: a host behind a bot filter, as claude.ai's document is, may
+        // refuse a fetch that sends none.
         let client = Client::builder()
+            .user_agent(USER_AGENT)
             .redirect(redirect::Policy::none())
             .no_proxy()
             .resolve(host, address)
