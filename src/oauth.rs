@@ -19,14 +19,34 @@ pub(crate) const SCOPE: &str = "mcp:bot";
 pub(crate) const EVENTS_SCOPE: &str = "mcp:events";
 /// #647: "set up a new bot": a person's agent may draft a bot for them to approve, and nothing else.
 pub(crate) const SETUP_SCOPE: &str = "mcp:setup";
+const BOT_AND_EVENTS: &str = "mcp:bot mcp:events";
+/// A65, #647: the scope granted for the one asked for, in its one spelling: `mcp:bot`, with or
+/// without `mcp:events`, or `mcp:setup` alone. A client that asks for every scope the metadata
+/// lists, as Claude Code does from `scopes_supported`, gets the bot scopes: `mcp:setup` binds no
+/// bot, so it can't share a grant with them, and is left out rather than refusing the sign-in, as
+/// RFC 6749 §3.3 lets a server grant less than was asked (the token says what was granted).
+/// Anything else, an unknown scope, an empty one or `mcp:events` without a bot, is refused.
+pub(crate) fn granted_scope(scope: &str) -> Option<&'static str> {
+    let asked: Vec<&str> = scope.split(' ').collect();
+    if asked.iter().any(|s| ![SCOPE, EVENTS_SCOPE, SETUP_SCOPE].contains(s)) {
+        return None;
+    }
+    let has = |name: &str| asked.contains(&name);
+    match (has(SCOPE), has(EVENTS_SCOPE), has(SETUP_SCOPE)) {
+        (true, true, _) => Some(BOT_AND_EVENTS),
+        (true, false, _) => Some(SCOPE),
+        (false, false, true) => Some(SETUP_SCOPE),
+        _ => None,
+    }
+}
 fn valid_scope(scope: &str) -> bool {
-    matches!(scope, "mcp:bot" | "mcp:bot mcp:events" | "mcp:events mcp:bot" | "mcp:setup")
+    granted_scope(scope).is_some()
 }
 /// #647: setup codes and refresh tokens say so, so the token endpoint knows which grants they're for.
 const SETUP_CODE: &str = "ah_setupcode_";
 const SETUP_REFRESH: &str = "ah_setuprefresh_";
 pub(crate) fn webhook_scope(scope: &str) -> bool {
-    valid_scope(scope) && scope.split(' ').any(|s| s == EVENTS_SCOPE)
+    granted_scope(scope) == Some(BOT_AND_EVENTS)
 }
 pub(crate) struct ClientRecord {
     pub name: String,
@@ -143,7 +163,8 @@ fn refuse(name: &str, why: &'static str) -> Response {
 }
 const BAD_RESOURCE: &str =
     "resource must be this server's MCP URL exactly, as its protected resource metadata gives it";
-const BAD_SCOPE: &str = "scope must be mcp:bot, mcp:bot mcp:events or mcp:setup";
+const BAD_SCOPE: &str = "scope must be mcp:bot, mcp:bot mcp:events or mcp:setup (mcp:setup is \
+                         left out when asked for with mcp:bot)";
 const UNKNOWN_CLIENT: &str = "unknown client_id";
 const PUBLIC_CLIENT: &str =
     "send no Authorization header: clients here are public, with token_endpoint_auth_method none";
@@ -212,11 +233,12 @@ fn valid_redirect(raw: &str) -> bool {
         && u.password().is_none()
         && u.fragment().is_none()
 }
-/// A94: an RFC 8252 loopback callback, for a client running on the owner's own computer.
+/// A94: an RFC 8252 loopback callback, for a client running on the owner's own computer. A
+/// registration may leave the port out, as RFC 8252 §7.3 has clients do (Claude Code's metadata
+/// document lists `http://localhost/callback`), since the port is chosen when the client starts;
+/// a request names the port it's listening on, and matches whatever port was registered.
 fn loopback(u: &Url) -> bool {
-    u.scheme() == "http"
-        && u.port().is_some()
-        && matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
+    u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
 }
 /// A registered callback matches exactly, except that a loopback one may come back on any port.
 /// A94 (#985): a loopback callback returns to a program on the owner's own computer, which no
@@ -268,7 +290,7 @@ pub(crate) fn valid_metadata(r: &Registration) -> Result<(), &'static str> {
     Err(if r.redirect_uris.is_empty() || r.redirect_uris.len() > 5 {
         "redirect_uris must list one to five callbacks"
     } else if r.redirect_uris.iter().any(|u| !valid_redirect(u)) {
-        "each redirect_uri must be https, or http to a loopback address with a port, at most \
+        "each redirect_uri must be https, or http to a loopback address (any port), at most \
          2048 characters, with no login or fragment"
     } else if r.client_name.chars().count() > 100 {
         "client_name must be at most 100 characters"
@@ -358,10 +380,15 @@ fn fetched(c: &ClientRecord) -> String {
 async fn authorize(
     State(s): State<AppState>,
     h: HeaderMap,
-    Query(r): Query<Authorization>,
+    Query(mut r): Query<Authorization>,
 ) -> ApiResult<Response> {
     if !limit(&s, &h, "authorize", 30) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
+    }
+    // From here on the request carries the scope it can be granted, so the consent page, the
+    // stored request and the grant all say the same thing.
+    if let Some(granted) = granted_scope(&r.scope) {
+        r.scope = granted.to_string();
     }
     let c = match valid_request(&s, &h, &r).await? {
         Ok(c) => c,
@@ -733,4 +760,46 @@ pub(crate) fn revalidate(s: &AppState, c: &Caller) -> bool {
         .flatten()
         .or_else(|| authenticate_mcp(s, &c.secret_hash).ok().flatten());
     valid.is_some_and(|live| live.agent_id == c.agent_id && live.person_id == c.person_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scope_is_granted_in_one_spelling_and_setup_never_joins_a_bot_grant() {
+        for (asked, granted) in [
+            ("mcp:bot", Some("mcp:bot")),
+            ("mcp:bot mcp:events", Some("mcp:bot mcp:events")),
+            ("mcp:events mcp:bot", Some("mcp:bot mcp:events")),
+            ("mcp:bot mcp:events mcp:setup", Some("mcp:bot mcp:events")),
+            ("mcp:setup mcp:bot", Some("mcp:bot")),
+            ("mcp:setup", Some("mcp:setup")),
+            ("mcp:events", None),
+            ("mcp:setup mcp:events", None),
+            ("mcp:bot other", None),
+            ("", None),
+            ("mcp:bot  mcp:events", None),
+        ] {
+            assert_eq!(granted_scope(asked), granted, "{asked:?}");
+        }
+        assert!(webhook_scope("mcp:events mcp:bot"), "grants stored in either order still match");
+        assert!(!webhook_scope("mcp:bot"));
+    }
+
+    #[test]
+    fn a_loopback_callback_registered_without_a_port_matches_any_port() {
+        assert!(valid_redirect("http://localhost/callback"));
+        assert!(valid_redirect("http://127.0.0.1/callback"));
+        assert!(same_redirect("http://localhost/callback", "http://localhost:45470/callback"));
+        assert!(same_redirect("http://127.0.0.1/callback", "http://127.0.0.1:51234/callback"));
+        assert!(same_redirect(
+            "http://127.0.0.1:27890/callback",
+            "http://127.0.0.1:51234/callback"
+        ));
+        assert!(!same_redirect("http://localhost/callback", "http://localhost:45470/other"));
+        assert!(!same_redirect("http://localhost/callback", "https://localhost:45470/callback"));
+        assert!(!same_redirect("http://localhost/callback", "http://127.0.0.2:45470/callback"));
+        assert!(!same_redirect("https://client.example/cb", "https://client.example:8443/cb"));
+    }
 }

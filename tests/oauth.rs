@@ -1315,7 +1315,7 @@ async fn oauth_refusals_say_which_check_failed_and_repeat_nothing_sent() {
         (
             registered,
             "invalid_client_metadata",
-            "each redirect_uri must be https, or http to a loopback address with a port, at most \
+            "each redirect_uri must be https, or http to a loopback address (any port), at most \
              2048 characters, with no login or fragment",
         ),
         (authorized, "invalid_request", "redirect_uri is not registered for this client"),
@@ -1520,7 +1520,6 @@ async fn oauth_loopback_callbacks_serve_clients_on_the_owners_computer() {
     let s = Server::start().await;
     let (session, bot, _, _) = s.setup().await;
     for redirect in [
-        "http://127.0.0.1/callback",
         "http://127.0.0.2:27890/callback",
         "http://10.0.0.1:27890/callback",
         "http://127.0.0.1.example:27890/callback",
@@ -2127,6 +2126,8 @@ async fn after_approval_the_agent_reconnects_as_the_new_bot() {
 /// A118: the metadata documents these tests serve from memory, in place of fetching them, so A119's
 /// bounds stay as they are. Its address check has a unit test of its own in src/cimd.rs.
 const DOCUMENT: &str = "https://client.example/oauth/client.json";
+const CLAUDE_CODE: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+const CLAUDE_CODE_DOCUMENT: &str = r#"{"client_id":"https://claude.ai/oauth/claude-code-client-metadata","client_name":"Claude Code","client_uri":"https://claude.ai","redirect_uris":["http://localhost/callback","http://127.0.0.1/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}"#;
 fn serve_documents(server: &Server) {
     server.state.cimd.serve_from_memory(|url| {
         let (named, callback) = match url {
@@ -2137,6 +2138,8 @@ fn serve_documents(server: &Server) {
             "https://client.example/oauth/elsewhere.json" => {
                 ("https://client.example/oauth/elsewhere.json", "https://client.example/elsewhere")
             }
+            // Claude Code's document as claude.ai serves it: loopback callbacks with no port.
+            CLAUDE_CODE => return Some(CLAUDE_CODE_DOCUMENT.to_string()),
             _ => return None,
         };
         let document = json!({
@@ -2198,5 +2201,170 @@ async fn a_client_document_must_name_itself_and_list_the_callback() {
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{why}");
         let body: Value = refused.json().await.unwrap();
         assert_eq!(body["error"], "invalid_request", "{why}");
+    }
+}
+
+impl Server {
+    /// An authorization request as a client sends it, with any client, callback and scope.
+    async fn authorize_as(
+        &self,
+        session: &str,
+        client: &str,
+        redirect: &str,
+        scope: &str,
+    ) -> reqwest::Response {
+        self.client
+            .get(format!("{}/oauth/authorize", self.base))
+            .header("cookie", format!("ah_session={session}"))
+            .query(&[
+                ("client_id", client),
+                ("redirect_uri", redirect),
+                ("response_type", "code"),
+                ("code_challenge", CHALLENGE),
+                ("code_challenge_method", "S256"),
+                ("resource", &format!("{}/mcp", self.base)),
+                ("scope", scope),
+                ("state", "client-state"),
+            ])
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+// `claude mcp login`: Claude Code's client_id is its metadata document on claude.ai, whose
+// redirect_uris are loopback ones with no port (RFC 8252 §7.3), and it asks for every scope in
+// scopes_supported. It signs in as a bot with mention webhooks, coming back on whatever port it
+// listens on, at localhost or 127.0.0.1.
+#[tokio::test]
+async fn claude_code_signs_in_with_its_metadata_document_and_every_advertised_scope() {
+    let server = Server::start().await;
+    serve_documents(&server);
+    let (session, bot, _, _) = server.setup().await;
+    let metadata: Value = server
+        .client
+        .get(format!("{}/.well-known/oauth-protected-resource/mcp", server.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let every: Vec<&str> =
+        metadata["scopes_supported"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let every = every.join(" ");
+    assert_eq!(every, "mcp:bot mcp:events mcp:setup");
+
+    for redirect in ["http://localhost:45470/callback", "http://127.0.0.1:51234/callback"] {
+        let page = server.authorize_as(&session, CLAUDE_CODE, redirect, &every).await;
+        assert_eq!(page.status(), StatusCode::OK, "{redirect}");
+        let page = page.text().await.unwrap();
+        assert!(
+            page.contains("Client label (not verified): <strong>Claude Code</strong>"),
+            "{page}"
+        );
+        assert!(page.contains("Client details fetched from claude.ai."), "{page}");
+        assert!(page.contains("returns to a program on this computer"), "{page}");
+        assert!(page.contains("Allow selected bot") && page.contains("Allow mention webhooks"));
+        assert!(!page.contains("Allow setting up a new bot"), "mcp:setup is left out: {page}");
+    }
+    // Only loopback callbacks the document lists, on any port, and nothing that looks like one.
+    for redirect in [
+        "http://localhost:45470/other",
+        "https://localhost:45470/callback",
+        "http://127.0.0.2:45470/callback",
+        "http://[::1]:45470/callback",
+        "http://localhost.example:45470/callback",
+    ] {
+        let refused = server.authorize_as(&session, CLAUDE_CODE, redirect, &every).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{redirect}");
+        let body: Value = refused.json().await.unwrap();
+        assert_eq!(body["error_description"], "redirect_uri is not registered for this client");
+    }
+
+    let callback = "http://localhost:45470/callback";
+    let page = server.authorize_as(&session, CLAUDE_CODE, callback, &every).await;
+    let nonce = hidden(&page.text().await.unwrap(), "nonce");
+    let consent = server.consent(&session, &nonce, &bot, "allow").await;
+    assert_eq!(consent.status(), StatusCode::SEE_OTHER);
+    let location = reqwest::Url::parse(consent.headers()["location"].to_str().unwrap()).unwrap();
+    assert_eq!(location.origin().ascii_serialization(), "http://localhost:45470");
+    let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
+    let resource = format!("{}/mcp", server.base);
+    let token = server
+        .client
+        .post(format!("{}/oauth/token", server.base))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", CLAUDE_CODE),
+            ("code", code.as_str()),
+            ("redirect_uri", callback),
+            ("resource", resource.as_str()),
+            ("code_verifier", VERIFIER),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(token.status(), StatusCode::OK);
+    let token: Value = token.json().await.unwrap();
+    assert_eq!(token["scope"], "mcp:bot mcp:events", "the token says what was granted");
+    let access = token["access_token"].as_str().unwrap();
+    assert_eq!(server.mcp(access).await.status(), StatusCode::OK);
+    // A refresh may name the same scopes again.
+    let refreshed = server
+        .client
+        .post(format!("{}/oauth/token", server.base))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", CLAUDE_CODE),
+            ("resource", resource.as_str()),
+            ("refresh_token", token["refresh_token"].as_str().unwrap()),
+            ("scope", every.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refreshed.status(), StatusCode::OK);
+}
+
+// A65, #647: mcp:setup is left out when asked for with mcp:bot, and stays its own grant alone.
+// What the Hermes bots ask for, mcp:bot mcp:events on a 127.0.0.1 callback, is unchanged.
+#[tokio::test]
+async fn a_scope_is_granted_as_its_bot_or_setup_part_and_nothing_else_is() {
+    let server = Server::start().await;
+    let (session, _, _, _) = server.setup().await;
+    let registered = "http://127.0.0.1:27890/callback";
+    let r = server
+        .client
+        .post(format!("{}/oauth/register", server.base))
+        .json(&json!({"redirect_uris":[registered],"client_name":"Hermes","token_endpoint_auth_method":"none"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let hermes: String = r.json::<Value>().await.unwrap()["client_id"].as_str().unwrap().into();
+    let callback = "http://127.0.0.1:51234/callback";
+    for (scope, webhooks) in [
+        ("mcp:bot mcp:events", true),
+        ("mcp:events mcp:bot", true),
+        ("mcp:bot", false),
+        ("mcp:bot mcp:events mcp:setup", true),
+        ("mcp:setup mcp:bot", false),
+    ] {
+        let page = server.authorize_as(&session, &hermes, callback, scope).await;
+        assert_eq!(page.status(), StatusCode::OK, "{scope}");
+        let page = page.text().await.unwrap();
+        assert!(page.contains("Allow selected bot"), "{scope}: {page}");
+        assert_eq!(page.contains("Allow mention webhooks"), webhooks, "{scope}");
+    }
+    let setup = server.authorize_as(&session, &hermes, callback, "mcp:setup").await;
+    assert!(setup.text().await.unwrap().contains("Allow setting up a new bot"));
+    for scope in
+        ["mcp:events", "mcp:setup mcp:events", "mcp:bot owner:all", "", "mcp:bot  mcp:events"]
+    {
+        let refused = server.authorize_as(&session, &hermes, callback, scope).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{scope:?}");
+        let body: Value = refused.json().await.unwrap();
+        assert!(body["error_description"].as_str().unwrap().starts_with("scope must be"), "{body}");
     }
 }
