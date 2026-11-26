@@ -348,6 +348,23 @@ input::placeholder { color: #8b7a5e; }
 /* Over the board and the empty state: a person's name sits above their head, so at the back of the
    room it would slide behind the whiteboard, and with no bots here the empty state would cover it. */
 .stage-overlay { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.drop-banner {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: 90%;
+  padding: 3px 10px;
+  overflow: hidden;
+  font: 13px/1.3 var(--ui);
+  color: var(--wd-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--wd-face);
+  box-shadow: inset 1px 1px 0 var(--wd-hi), inset -1px -1px 0 var(--wd-lo), 1px 1px 0 var(--wd-dk);
+}
+.drop-banner[hidden] { display: none; }
 .stage[data-size="small"] { --fill: .62; }
 .stage[data-size="medium"] { --fill: .82; }
 @media (max-width: 700px) {

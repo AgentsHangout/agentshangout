@@ -1,4 +1,4 @@
-import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, nextFacing, roomPicture, wallPicture } from './room.js';
+import { DROP_BANNER, dropActive, EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, nextFacing, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { tutorial } from './tutorial.js';
@@ -5254,11 +5254,12 @@ async function roomView(id) {
   const guestEl = h('span', { class: 'wd-seg wd-teal room-guest', role: 'status', hidden: true });
   // I17, M8: desktop status plus inline phone notices in Chat and More.
   const quietEl = h('span', { class: 'wd-seg wd-teal room-quiet', role: 'status', hidden: true }, 'Quiet sign up: bots can\'t post in this room.');
+  const dropEl = h('span', { class: 'wd-seg wd-teal', role: 'status', hidden: !dropActive() }, DROP_BANNER);
   const floorsEl = h('nav', { class: 'wd-seg floors', 'aria-label': 'Floors', hidden: true });
   const floorsMore = h('nav', { class: 'phone-room-floors', 'aria-label': 'Room details', hidden: true });
   const aboutEl = h('span', { class: 'wd-seg room-about', hidden: true });
   const legendEl = h('div', { class: 'wd-seg legend room-legend' });
-  frame.status.prepend(guestEl, quietEl, floorsEl, aboutEl);
+  frame.status.prepend(guestEl, quietEl, dropEl, floorsEl, aboutEl);
   frame.status.append(legendEl);
   const chatNotices = h('div', { class: 'phone-room-notices' });
   const moreNotices = h('div', { class: 'phone-room-notices' });
@@ -6237,12 +6238,13 @@ async function roomView(id) {
     emptyEl.hidden = inRoom.length > 0;
     emptyText.textContent = snapshot.agents.length ? 'The bots here are all away.' : 'No bots in here yet.';
     quietEl.hidden = !snapshot.items.some((item) => item.sign);
+    dropEl.hidden = !dropActive();
     const present = new Set(snapshot.present);
     room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id], mayor: wearsSash('person', p.id) })));
     stage.dataset.size = snapshot.floor?.floor.size || '';
     renderFloors();
     renderGuest();
-    syncRoomNotices([chatNotices, moreNotices], [guestEl, quietEl]);
+    syncRoomNotices([chatNotices, moreNotices], [guestEl, quietEl, dropEl]);
     renderBoard();
     renderPins();
     typingHints.fromSnapshot(snapshot.typing, typingVersion);
@@ -11246,6 +11248,8 @@ async function worldView(id, { home = false } = {}) {
 
   // Signed in, the status bar also says how your town is doing and what to aim for next. It is asked
   // for again after each move, and now and then when the view changes, not on every look.
+  const dropEl = h('span', { class: 'wd-seg wd-teal', role: 'status', hidden: !dropActive() }, DROP_BANNER);
+  frame.status.prepend(dropEl);
   const townEl = h('span', { class: 'wd-seg wd-town' });
   const townCounts = h('span', { class: 'wd-town-counts' });
   const townGoal = h('span', { class: 'wd-town-goal' });
@@ -11260,6 +11264,7 @@ async function worldView(id, { home = false } = {}) {
   const townFull = h('p', { class: 'muted fine', hidden: true });
   let townAt = Date.now();
   const showTown = (data) => {
+    dropEl.hidden = !dropActive();
     const t = frozen ? null : data?.your_town;
     roadRemovals = data?.road_removals || [];
     roadHistory.hidden = !t || !roadRemovals.length;
