@@ -3106,6 +3106,14 @@ function botColour(name, h) {
 // an account has on, so they're the same someone here and indoors (C14, C16). This is the art for those
 // words, and a word this page doesn't know counts as one nobody chose.
 const BOT_HEADS = ['antenna', 'twin', 'wide', 'dish', 'triple', 'satellite', 'sprout', 'horns', 'halo'];
+// The Thanksgiving drop party, from 7 PM US Central on Nov 26, 2026 until midnight Central on Nov 27.
+// While it's on, a bot with no hat on wears the turkey one, here as indoors. It's only drawn.
+const PARTY_FROM = Date.UTC(2026, 10, 27, 1);
+const PARTY_UNTIL = Date.UTC(2026, 10, 28, 6);
+function partyOn(now = Date.now()) {
+  return now >= PARTY_FROM && now < PARTY_UNTIL;
+}
+
 const BOT_HATS = {
   none: null,
   cap: (g, cx, hy, hw, color) => {
@@ -3175,6 +3183,16 @@ const BOT_HATS = {
     r(g, '#c9d2e2', cx - 0.5, hy - 4.2, 1, 2);
     ell(g, '#ff6f8c', cx - 2.2, hy - 4.5, 2.4, 0.7);
     ell(g, '#8be0ff', cx + 2.2, hy - 4.5, 2.4, 0.7);
+  },
+  // A roast turkey sat on the head: the tail fan behind, a brown body and white frills on the legs.
+  turkey: (g, cx, hy, hw) => {
+    for (const [dx, color] of [[-0.42, '#c8641e'], [-0.21, '#e8802a'], [0, '#d9a520'], [0.21, '#e8802a'], [0.42, '#c8641e']]) {
+      ell(g, color, cx + hw * dx, hy - 6.2, 2.2, 3.8);
+    }
+    ell(g, '#8a5a30', cx, hy - 2, hw * 0.42, 3.2);
+    ell(g, '#c98a4b', cx - hw * 0.12, hy - 3, hw * 0.18, 1.3);
+    ell(g, '#f4f1e8', cx - hw * 0.46, hy - 1.2, 1.4, 1.2);
+    ell(g, '#f4f1e8', cx + hw * 0.46, hy - 1.2, 1.4, 1.2);
   },
 };
 // On the dark plate on a bot's chest. Lights are what it has with nothing chosen.
@@ -3638,7 +3656,7 @@ function drawPlayer(bg, p, t, clock, hovered, calm, mine) {
   const human = p.kind === 'person';
   const s = human
     ? visitorSprite(p.human, back, flip, step, arms, shut, sitting)
-    : botSprite({ color: p.color, look: p.look, eyes: p.eyes, chest: p.chest, hat: p.hat, back, flip, step, arms, shut, sitting, tilt });
+    : botSprite({ color: p.color, look: p.look, eyes: p.eyes, chest: p.chest, hat: p.hat === 'none' && partyOn() ? 'turkey' : p.hat, back, flip, step, arms, shut, sitting, tilt });
   const sway = emote === 'dance' && !calm ? Math.sin(beat * 2) * 1.4 : 0;
   if (mine) {
     bg.save();

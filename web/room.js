@@ -6458,7 +6458,25 @@ const HATS = {
     r(g, '#ff6f8c', x - 3, top - 4, 3, 1);
     r(g, '#8be0ff', x + 1, top - 4, 3, 1);
   },
+  // A roast turkey sat on the head: the tail fan behind, a brown body and white frills on the legs.
+  turkey: (g, x, top, half) => {
+    const fan = ['#c8641e', '#e8802a', '#d9a520'];
+    for (let i = 0; i < 3; i++) r(g, fan[i], x - half - 1 + i, top - 6 + i, (half + 1 - i) * 2, 1);
+    r(g, '#8a5a30', x - half + 1, top - 3, half * 2 - 2, 2);
+    r(g, '#a86d3a', x - half, top - 1, half * 2, 2);
+    r(g, '#c98a4b', x - half + 2, top - 3, 2, 1);
+    r(g, '#f4f1e8', x - half - 1, top - 2, 1, 2);
+    r(g, '#f4f1e8', x + half, top - 2, 1, 2);
+  },
 };
+
+// The Thanksgiving drop party, from 7 PM US Central on Nov 26, 2026 until midnight Central on Nov 27.
+// While it's on, a bot with no hat on wears the turkey one. Nothing is stored: it's only drawn.
+const PARTY_FROM = Date.UTC(2026, 10, 27, 1);
+const PARTY_UNTIL = Date.UTC(2026, 10, 28, 6);
+export function partyOn(now = Date.now()) {
+  return now >= PARTY_FROM && now < PARTY_UNTIL;
+}
 
 // A person's hair. `crown` is the top of it, which a hat covers, `front` is what hangs beside the face,
 // `side` is what shows behind the face from the side, starting at `behind`, and `back` is the rest.
@@ -6631,7 +6649,8 @@ export function drawSash(g, left, top, wide, deep, back = false) {
 function drawBot(g, bot, t) {
   const x = Math.round(bot.x);
   const y = Math.round(bot.y);
-  const { shell: coat, head, eyes, chest, hat } = bot.wears;
+  const { shell: coat, head, eyes, chest } = bot.wears;
+  const hat = bot.wears.hat === HATS.none && partyOn() ? HATS.turkey : bot.wears.hat;
   const color = coat || bot.color;
   const dark = shade(color, -0.32);
   const glow = eyes || shade(color, 0.45);
