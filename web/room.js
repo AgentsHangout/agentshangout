@@ -6478,6 +6478,9 @@ export function partyOn(now = Date.now()) {
   return now >= PARTY_FROM && now < PARTY_UNTIL;
 }
 
+// What drops in during the party, in turn: the Fall pack's food.
+const PARTY_FOOD = [paintPumpkinPie, paintAppleBasket, paintCornucopia, paintCiderBarrel];
+
 // A person's hair. `crown` is the top of it, which a hat covers, `front` is what hangs beside the face,
 // `side` is what shows behind the face from the side, starting at `behind`, and `back` is the rest.
 const SHORT_CROWN = (g, x, top, hair) => {
@@ -7382,6 +7385,70 @@ export class Room {
     }
   }
 
+  // The Thanksgiving drop party (partyOn): turkeys wander the floor and a dish drops in every 20
+  // seconds, the last 10 staying where they land. Only this page draws them: nothing is stored, and
+  // with less motion asked for the turkeys stand still and food is just there.
+  party(g, dt, t) {
+    if (!partyOn()) {
+      this.feast = null;
+      return [];
+    }
+    const spot = () => ({
+      x: 24 + Math.random() * (W - 48),
+      y: FLOOR_TOP + 20 + Math.random() * (H - FLOOR_TOP - 26),
+    });
+    if (!this.feast) {
+      const turkeys = Array.from({ length: 12 }, () => ({ ...spot(), to: spot(), wait: Math.random() * 4 }));
+      this.feast = { turkeys, food: [], wait: 0, dropped: 0 };
+    }
+    const feast = this.feast;
+    for (const bird of feast.turkeys) {
+      if (this.calm) break;
+      bird.wait -= dt;
+      if (bird.wait > 0) continue;
+      const dx = bird.to.x - bird.x;
+      const dy = bird.to.y - bird.y;
+      const far = Math.hypot(dx, dy);
+      if (far < 1) {
+        bird.to = spot();
+        bird.wait = 1 + Math.random() * 4;
+      } else {
+        const step = Math.min(far, 14 * dt);
+        bird.x += (dx / far) * step;
+        bird.y += (dy / far) * step;
+      }
+    }
+    feast.wait -= dt;
+    if (feast.wait <= 0) {
+      feast.wait = 20;
+      const at = spot();
+      const paint = PARTY_FOOD[feast.dropped++ % PARTY_FOOD.length];
+      feast.food.push({ paint, x: at.x, land: at.y, y: this.calm ? at.y : -24, landed: this.calm });
+      if (feast.food.length > 10) feast.food.shift();
+    }
+    for (const dish of feast.food) {
+      if (dish.landed) continue;
+      dish.y = Math.min(dish.land, dish.y + 160 * dt);
+      if (dish.y < dish.land) continue;
+      dish.landed = true;
+      const colors = ['#e8802a', '#d9a520', '#c8641e', '#f4f1e8'];
+      for (let i = 0; i < 16; i++) {
+        this.confetti.push({
+          x: dish.x,
+          y: dish.land - 8,
+          vx: (Math.random() - 0.5) * 60,
+          vy: -20 - Math.random() * 40,
+          color: colors[i % colors.length],
+          life: 0.8 + Math.random() * 0.6,
+        });
+      }
+    }
+    return [
+      ...feast.turkeys.map((bird) => ({ y: bird.y, draw: () => paintTurkey(g, Math.round(bird.x), Math.round(bird.y), t) })),
+      ...feast.food.map((dish) => ({ y: dish.landed ? dish.y : H, draw: () => dish.paint(g, Math.round(dish.x), Math.round(dish.y), t) })),
+    ];
+  }
+
   // Moves a bot or a person along their path, and says whether they had one.
   walk(who, dt) {
     if (!who.path.length) return false;
@@ -7487,6 +7554,7 @@ export class Room {
       ...this.items.filter((item) => !item.sign && !item.flat).map((item) => ({ y: item.y, draw: () => this.drawItem(g, item, still) })),
       ...bots.map((bot) => ({ y: (!bot.path.length && bot.spot?.over) || bot.y, draw: () => drawBot(g, bot, time) })),
       ...people.map((person) => ({ y: person.y, draw: () => drawPerson(g, person, still) })),
+      ...this.party(g, dt, still),
     ];
     scene.sort((a, b) => a.y - b.y);
     for (const item of scene) item.draw();
