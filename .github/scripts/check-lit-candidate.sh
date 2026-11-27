@@ -2,7 +2,8 @@
 # lit starts this command inside each new candidate checkout.
 set -eu
 python3 -m unittest discover -s .github/tests -v
-docker run --rm -v "$PWD:/work:ro" -w /work \
+# The disposable checkout is private to the runner user.
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work:ro" -w /work \
   rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
 # Cargo uses 101 for a failed check. lit bisects on exit 1 and stops on
