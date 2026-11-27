@@ -68,6 +68,7 @@ dependencies = [
  "resvg",
  "rquickjs",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
