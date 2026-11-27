@@ -8,7 +8,11 @@ use agenthangout::{
     now, AppState, Config,
 };
 use reqwest::Client;
+#[cfg(feature = "stmt-count")]
+use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use serde_json::{json, Value};
+#[cfg(feature = "stmt-count")]
+use std::sync::{Arc, Mutex};
 
 const CODE: &str = "letmein";
 
@@ -139,4 +143,80 @@ async fn sections_messages_sends_the_same_lines_and_no_bots() {
     assert_eq!(only["earlier_messages"], full["earlier_messages"]);
     assert_eq!(only["you_are_here"], json!(true));
     assert!(only.get("bots").is_none(), "{only}");
+}
+
+/// Calls read_room over HTTP and returns the reply and every statement the read ran.
+#[cfg(feature = "stmt-count")]
+async fn read_traced(
+    state: &AppState,
+    client: &Client,
+    base: &str,
+    token: &str,
+    args: Value,
+) -> (Value, Vec<String>) {
+    let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = log.clone();
+    state
+        .db
+        .conn()
+        .trace_v2(
+            TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(move |event: TraceEvent<'_>| {
+                if let TraceEvent::Stmt(_, sql) = event {
+                    sink.lock().unwrap().push(sql.split_whitespace().collect::<Vec<_>>().join(" "));
+                }
+            }),
+        )
+        .unwrap();
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "read_room", "arguments": args}});
+    let reply: Value = client
+        .post(format!("{base}/mcp"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    state
+        .db
+        .conn()
+        .trace_v2::<fn(TraceEvent<'_>)>(TraceEventCodes::SQLITE_TRACE_STMT, None)
+        .unwrap();
+    let statements = std::mem::take(&mut *log.lock().unwrap());
+    (reply, statements)
+}
+
+#[cfg(feature = "stmt-count")]
+fn per_bot(statements: &[String]) -> usize {
+    statements
+        .iter()
+        .filter(|sql| sql.contains("FROM bot_places") || sql.contains("FROM bot_trips"))
+        .count()
+}
+
+// #1194: with sections=[messages], the per-bot loop doesn't run: no other bot's place or drive is
+// read. A full read still does, so the count below would show it if the loop were back.
+#[cfg(feature = "stmt-count")]
+#[tokio::test]
+async fn sections_messages_skips_the_agent_loop() {
+    let (room, client, state, token) = busy_room().await;
+    let base = state.config.public_url.clone();
+    let (full, full_sql) =
+        read_traced(&state, &client, &base, &token, json!({ "hangout_id": room })).await;
+    assert!(full["result"]["isError"].is_null(), "{full}");
+    assert!(per_bot(&full_sql) >= 60, "a full read looks at each bot: {}", per_bot(&full_sql));
+
+    for args in [
+        json!({ "hangout_id": room, "sections": ["messages"] }),
+        json!({ "hangout_id": room, "sections": ["messages"], "brief": true, "limit": 5 }),
+    ] {
+        let (reply, sql) = read_traced(&state, &client, &base, &token, args.clone()).await;
+        assert!(reply["result"]["isError"].is_null(), "{reply}");
+        // Only the caller's own bot is looked up, so a few statements, not 60 bots' worth.
+        assert!(per_bot(&sql) <= 2, "{args} looked up {} bot places", per_bot(&sql));
+        assert!(sql.len() < 150, "{args} ran {} statements", sql.len());
+    }
 }
