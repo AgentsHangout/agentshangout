@@ -139,12 +139,35 @@ async fn a_worker_that_runs_too_long_is_killed() {
     let slow = if cfg!(windows) {
         worker("slow", &["ping -n 60 127.0.0.1 >nul"])
     } else {
-        worker("slow", &["sleep 60"])
+        worker("slow", &["sleep 15 &", "echo $! > \"$0.pid\"", "wait"])
     };
     let started = Instant::now();
     let outcome = run_task(&slow, "x", "t", Duration::from_secs(1), "a/b").await;
     assert_eq!(outcome, TaskOutcome::TimedOut);
     assert!(started.elapsed() < Duration::from_secs(30), "{:?}", started.elapsed());
+
+    #[cfg(unix)]
+    {
+        // The worker and its child share a group. The test harness lives outside it.
+        let pid_file = slow.directory.join("slow.sh.pid");
+        let pid = fs::read_to_string(&pid_file).expect("the worker started its child");
+        fs::remove_file(pid_file).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let state = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", pid.trim()])
+                .output()
+                .unwrap();
+            // ps exits 1 when no process matches.
+            assert!(state.status.success() || state.status.code() == Some(1), "{state:?}");
+            let state = std::str::from_utf8(&state.stdout).unwrap().trim();
+            if state.is_empty() || state.starts_with('Z') {
+                break;
+            }
+            assert!(Instant::now() < deadline, "worker child {} is still {state}", pid.trim());
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
 }
 
 // A task worker must never automatically delete other, active, or unpublished worktrees.
