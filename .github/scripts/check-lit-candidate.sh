@@ -11,5 +11,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work:ro" -w /work \
 trap 'rc=$?; if [[ $rc == 101 ]]; then exit 1; fi; exit "$rc"' ERR
 cargo fmt --check
 time cargo build --locked --all-targets
+df -h .
+free -h
 time timeout --kill-after=30s 20m cargo test --locked
 time cargo clippy --locked --all-targets -- -D warnings
