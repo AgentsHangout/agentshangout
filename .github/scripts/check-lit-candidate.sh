@@ -15,7 +15,5 @@ check_exit() {
 trap 'check_exit "$?"' ERR
 cargo fmt --check
 time cargo build --locked --all-targets
-df -h .
-free -h
 time timeout --kill-after=30s 20m cargo test --locked
 time cargo clippy --locked --all-targets -- -D warnings

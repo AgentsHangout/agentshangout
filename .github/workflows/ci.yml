@@ -22,9 +22,6 @@ jobs:
       # Debug info is most of what the test binaries weigh, and a failed test still names its file
       # and line. Publish sets this too, because it's part of the cache key the two share.
       CARGO_PROFILE_DEV_DEBUG: 0
-      # CI links each Rust integration test separately on an ephemeral disk.
-      CARGO_PROFILE_DEV_STRIP: symbols
-      CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,18 +35,6 @@ jobs:
           save-if: false
       - run: cargo fmt --check
       - run: cargo build --locked --all-targets
-      - name: Record capacity before running the test binaries
-        run: |
-          {
-            df -h . "$RUNNER_TEMP"
-            free -h
-            du -sh target target/debug/deps
-          } | tee "$RUNNER_TEMP/rust-test-capacity.txt"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rust-test-capacity
-          path: ${{ runner.temp }}/rust-test-capacity.txt
-          retention-days: 3
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
 
