@@ -1,0 +1,77 @@
+name: lit batch
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: lit-batch-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  batch:
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.body, 'Lit-with:')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install lit v0.1.4
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/lit-bin"
+          cd "$RUNNER_TEMP/lit-bin"
+          curl --fail --silent --show-error --location --retry 3 -o lit \
+            https://github.com/CakeRepository/lit/releases/download/v0.1.4/lit-linux-amd64
+          echo '4dccca72c50270f21b835203733c55ada7907fa7214cc3bd5e7316123960d94e  lit' | sha256sum -c -
+          chmod +x lit
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Pin the main revision and selected PR heads
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/lit_batch.py
+      - name: Check combined candidates
+        if: steps.sources.outputs.pinned == 'true'
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/lit-batch"
+          # The candidate shell expands $1 and sends a copy to the live runner log on fd 3.
+          # shellcheck disable=SC2016
+          lit run sources.json --repo repo.git --state state \
+            --test bash -o pipefail -c 'bash "$1" 2>&1 | tee /dev/fd/3' \
+              _ "$GITHUB_WORKSPACE/.github/scripts/check-lit-candidate.sh" 3>&1
+      - name: Show the result for each source
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for result in "$RUNNER_TEMP"/lit-batch/state/runs/*/result.json; do
+            jq -r '
+              "Base: `\(.snapshot.base)`", "", "| PR | Pinned revision | Batch checks |",
+              "| --- | --- | --- |",
+              (.tested as $passed | .snapshot.changes[] |
+               "| #\(.number) | `\(.head)` | \(if (.number as $n | $passed | index($n)) != null then "passed" else "held" end) |")
+            ' "$result" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Save the pinned sources, attempts and test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lit-batch
+          path: |
+            ${{ runner.temp }}/lit-batch/sources.json
+            ${{ runner.temp }}/lit-batch/state/runs/
+          if-no-files-found: ignore
+          retention-days: 7
