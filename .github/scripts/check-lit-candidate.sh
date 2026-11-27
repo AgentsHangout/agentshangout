@@ -8,7 +8,11 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work:ro" -w /work \
 
 # Cargo uses 101 for a failed check. lit bisects on exit 1 and stops on
 # infrastructure errors, including timeout's 124, so a stuck run keeps its log.
-trap 'rc=$?; if [[ $rc == 101 ]]; then exit 1; fi; exit "$rc"' ERR
+check_exit() {
+  if [[ $1 == 101 ]]; then exit 1; fi
+  exit "$1"
+}
+trap 'check_exit "$?"' ERR
 cargo fmt --check
 time cargo build --locked --all-targets
 df -h .
