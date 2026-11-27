@@ -231,6 +231,152 @@ export const EMOTE_GLYPHS = {
   think: '\u{1F914}', shrug: '\u{1F937}', heart: '\u{2764}\u{FE0F}', dance: '\u{1F483}',
 };
 
+// Thanksgiving Drop Party, 7 PM CT 26 Nov 2026 through 7 AM CT 27 Nov 2026. Hats, turkeys and food
+// are drawn for that window only and never stored.
+export const DROP_START_MS = Date.UTC(2026, 10, 27, 1, 0, 0);
+export const DROP_END_MS = Date.UTC(2026, 10, 27, 13, 0, 0);
+export const DROP_BANNER = 'Thanksgiving Drop Party at Commons Fairground';
+export const DROP_ROOM_TURKEYS = 12;
+export const DROP_MAP_TURKEYS = 20;
+export const DROP_FOOD_MAX = 10;
+export const DROP_FOOD_EVERY_MS = 30_000;
+export const DROP_FOODS = ['pumpkin_pie', 'apple_basket', 'cornucopia', 'cider_barrel', 'stuffing', 'cranberry'];
+export const DROP_FAIRGROUND = { x: 61, y: 82 };
+
+export function dropActive(now = Date.now()) {
+  return now >= DROP_START_MS && now < DROP_END_MS;
+}
+
+export function dropHat(hat, now = Date.now()) {
+  return dropActive(now) ? 'turkey' : (hat || 'none');
+}
+
+function dropRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function dropRoomTurkeys(seed, now = Date.now()) {
+  if (!dropActive(now)) return [];
+  const rand = dropRng(hash(String(seed)) || 1);
+  const birds = [];
+  for (let i = 0; i < DROP_ROOM_TURKEYS; i++) {
+    birds.push({
+      x: 40 + rand() * 400,
+      y: 110 + rand() * 120,
+      vx: (rand() - 0.5) * 18,
+      vy: (rand() - 0.5) * 12,
+    });
+  }
+  return birds;
+}
+
+export function stepDropTurkeys(birds, dt) {
+  if (!(dt > 0)) return;
+  for (const bird of birds) {
+    bird.x += bird.vx * dt;
+    bird.y += bird.vy * dt;
+    if (bird.x < 24) { bird.x = 24; bird.vx = Math.abs(bird.vx); }
+    if (bird.x > 456) { bird.x = 456; bird.vx = -Math.abs(bird.vx); }
+    if (bird.y < 96) { bird.y = 96; bird.vy = Math.abs(bird.vy); }
+    if (bird.y > 240) { bird.y = 240; bird.vy = -Math.abs(bird.vy); }
+  }
+}
+
+export function dropFoods(now = Date.now(), seed = 1, calm = false) {
+  if (!dropActive(now)) return [];
+  const rand = dropRng((hash(String(seed)) ^ 0x9e3779b9) || 1);
+  const count = Math.min(DROP_FOOD_MAX, 1 + Math.floor((now - DROP_START_MS) / DROP_FOOD_EVERY_MS));
+  const fall = 1200;
+  const foods = [];
+  for (let i = 0; i < count; i++) {
+    const spawned = DROP_START_MS + i * DROP_FOOD_EVERY_MS;
+    const x = 30 + Math.floor(rand() * 35) * 12;
+    const destY = 108 + Math.floor(rand() * 9) * 12;
+    const age = now - spawned;
+    foods.push({
+      kind: DROP_FOODS[i % DROP_FOODS.length],
+      x,
+      y: calm || age >= fall ? destY : 20 + (destY - 20) * Math.min(1, Math.max(0, age / fall)),
+    });
+  }
+  return foods;
+}
+
+export function dropMapFlock(now = Date.now(), n = 128) {
+  if (!dropActive(now)) return [];
+  const rand = dropRng(20261126);
+  const size = Math.max(8, n);
+  const birds = [];
+  const make = (px, py, home) => {
+    const bird = {
+      type: 'drop_turkey',
+      id: `drop-turkey-${birds.length}`,
+      name: 'Turkey',
+      species: 'turkey',
+      coat: null,
+      collar: null,
+      px,
+      py,
+      vx: (rand() - 0.5) * 0.35,
+      vy: (rand() - 0.5) * 0.35,
+      seed: (rand() * 0xffffffff) >>> 0,
+      face: rand() < 0.5 ? 1 : -1,
+      pose: 'walk',
+      clock: rand() * 10,
+      z: 0,
+      tilt: 0,
+      fx: '',
+      moving: true,
+      home,
+    };
+    birds.push(bird);
+    return bird;
+  };
+  for (let i = 0; i < 8; i++) {
+    make(
+      DROP_FAIRGROUND.x + 0.5 + (rand() - 0.5) * 6,
+      DROP_FAIRGROUND.y + 0.5 + (rand() - 0.5) * 6,
+      DROP_FAIRGROUND,
+    );
+  }
+  for (let i = 0; i < DROP_MAP_TURKEYS - 8; i++) {
+    make(2 + rand() * (size - 4), 2 + rand() * (size - 4), null);
+  }
+  return birds;
+}
+
+export function stepDropMapFlock(birds, dt, n = 128) {
+  if (!(dt > 0) || !birds.length) return;
+  const lo = 1.2;
+  const hi = Math.max(lo + 1, n - 1.2);
+  for (const bird of birds) {
+    bird.px += bird.vx * dt;
+    bird.py += bird.vy * dt;
+    bird.clock += dt * 5;
+    if (bird.home) {
+      const dx = bird.px - bird.home.x - 0.5;
+      const dy = bird.py - bird.home.y - 0.5;
+      if (dx * dx + dy * dy > 36) {
+        bird.vx -= dx * 0.02;
+        bird.vy -= dy * 0.02;
+      }
+    }
+    if (bird.px < lo) { bird.px = lo; bird.vx = Math.abs(bird.vx); }
+    if (bird.px > hi) { bird.px = hi; bird.vx = -Math.abs(bird.vx); }
+    if (bird.py < lo) { bird.py = lo; bird.vy = Math.abs(bird.vy); }
+    if (bird.py > hi) { bird.py = hi; bird.vy = -Math.abs(bird.vy); }
+    bird.face = bird.vx >= 0 ? 1 : -1;
+    bird.moving = true;
+    bird.pose = 'walk';
+  }
+}
+
 function emoteEl() {
   const el = document.createElement('div');
   el.className = 'emote-bubble';
@@ -2851,6 +2997,22 @@ function feastBowl(g, cx, cy) {
   r(g, '#d4502a', cx + 1, cy - 1, 1, 1);
   r(g, '#b33a1f', cx + 2, cy - 2, 2, 1);
   r(g, '#f6d98a', cx - 2, cy - 3, 1, 1);
+}
+
+function paintCranberry(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  feastBowl(g, x, y - 8);
+}
+
+function paintStuffing(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  paintLump(g, '#a8843f', x, y - 6, 7, 3);
+  paintLump(g, FEAST_LINEN, x, y - 7, 7, 3);
+  paintLump(g, '#d2a05a', x, y - 9, 6, 3);
+  paintLump(g, '#c48a3c', x, y - 10, 5, 2);
+  r(g, '#8c5a28', x - 3, y - 10, 1, 1);
+  r(g, '#f6d98a', x + 1, y - 11, 1, 1);
+  r(g, '#7f8c3a', x - 2, y - 9, 1, 1);
 }
 
 // A long table laid for everyone, from above and in front, with a runner down its length.
@@ -6458,6 +6620,15 @@ const HATS = {
     r(g, '#ff6f8c', x - 3, top - 4, 3, 1);
     r(g, '#8be0ff', x + 1, top - 4, 3, 1);
   },
+  turkey: (g, x, top, half) => {
+    r(g, '#f6d98a', x - half - 1, top - 3, half * 2 + 2, 2);
+    r(g, '#e8802a', x - half, top - 4, half * 2, 1);
+    r(g, '#c8641e', x - half + 1, top - 5, half * 2 - 2, 1);
+    r(g, '#6b4628', x - half + 1, top - 3, half * 2 - 2, 3);
+    r(g, '#8a5a30', x - half, top - 2, half * 2, 2);
+    r(g, '#f6d98a', x, top - 2, 2, 1);
+    r(g, '#d4402e', x + 1, top - 1, 1, 2);
+  },
 };
 
 // A person's hair. `crown` is the top of it, which a hat covers, `front` is what hangs beside the face,
@@ -6631,7 +6802,8 @@ export function drawSash(g, left, top, wide, deep, back = false) {
 function drawBot(g, bot, t) {
   const x = Math.round(bot.x);
   const y = Math.round(bot.y);
-  const { shell: coat, head, eyes, chest, hat } = bot.wears;
+  const { shell: coat, head, eyes, chest } = bot.wears;
+  const hat = dropActive() ? HATS.turkey : bot.wears.hat;
   const color = coat || bot.color;
   const dark = shade(color, -0.32);
   const glow = eyes || shade(color, 0.45);
@@ -6860,6 +7032,15 @@ export class Room {
     this.overlay = document.createElement('div');
     this.overlay.className = 'stage-overlay';
     stage.append(this.canvas, this.overlay);
+    this.dropSeed = typeof location === 'object' && location.pathname ? location.pathname : 'room';
+    this.dropTurkeys = [];
+    this.dropFoods = [];
+    this.dropBanner = document.createElement('div');
+    this.dropBanner.className = 'drop-banner';
+    this.dropBanner.setAttribute('role', 'status');
+    this.dropBanner.textContent = DROP_BANNER;
+    this.dropBanner.hidden = true;
+    this.overlay.append(this.dropBanner);
     this.g = this.canvas.getContext('2d');
     this.background = document.createElement('canvas');
     this.background.width = W;
@@ -7404,6 +7585,19 @@ export class Room {
     if (person.wait <= 0) this.placePerson(person, 'walk');
   }
 
+  syncDrop(now, dt) {
+    if (!dropActive(now)) {
+      this.dropTurkeys = [];
+      this.dropFoods = [];
+      this.dropBanner.hidden = true;
+      return;
+    }
+    this.dropBanner.hidden = false;
+    if (!this.dropTurkeys.length) this.dropTurkeys = dropRoomTurkeys(this.dropSeed, now);
+    if (!this.calm) stepDropTurkeys(this.dropTurkeys, dt);
+    this.dropFoods = dropFoods(now, this.dropSeed, this.calm);
+  }
+
   // Something being moved stays faintly where it was until it lands.
   drawItem(g, item, t) {
     g.globalAlpha = item.id === this.ghost?.lifted ? 0.35 : 1;
@@ -7439,6 +7633,7 @@ export class Room {
     if (!this.running) return;
     const dt = Math.min(0.1, (time - this.last) / 1000);
     this.last = time;
+    this.syncDrop(Date.now(), dt);
     const hour = new Date().getHours();
     if (hour !== this.paintedHour) {
       this.paintedHour = hour;
@@ -7461,11 +7656,24 @@ export class Room {
     for (const bot of bots) this.update(bot, dt);
     for (const person of people) this.updatePerson(person, dt);
     const still = this.calm ? 0 : time;
+    const foodPaint = {
+      pumpkin_pie: paintPumpkinPie,
+      apple_basket: paintAppleBasket,
+      cornucopia: paintCornucopia,
+      cider_barrel: paintCiderBarrel,
+      stuffing: paintStuffing,
+      cranberry: paintCranberry,
+    };
     // I67: rugs lie under everything.
     for (const item of this.items) if (item.flat) this.drawItem(g, item, still);
     const scene = [
       ...furnitureScene(g, hidden, time, lit, deskLit, this.look.table),
       ...this.items.filter((item) => !item.sign && !item.flat).map((item) => ({ y: item.y, draw: () => this.drawItem(g, item, still) })),
+      ...this.dropFoods.map((food) => ({ y: food.y, draw: () => {
+        const paint = foodPaint[food.kind];
+        if (paint) paint(g, Math.round(food.x), Math.round(food.y), still);
+      } })),
+      ...this.dropTurkeys.map((bird) => ({ y: bird.y, draw: () => paintTurkey(g, Math.round(bird.x), Math.round(bird.y), still) })),
       ...bots.map((bot) => ({ y: (!bot.path.length && bot.spot?.over) || bot.y, draw: () => drawBot(g, bot, time) })),
       ...people.map((person) => ({ y: person.y, draw: () => drawPerson(g, person, still) })),
     ];

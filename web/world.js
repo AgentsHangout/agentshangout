@@ -10,7 +10,7 @@
 // cars when they go far), frogs and smoke live on top. Sprites for tiles just off screen are made in spare moments, offscreen
 // things aren't drawn, and the loop stops when the page is hidden or scrolled out of view.
 
-import { EYES, FABRICS, HAIRS, LEGS, SKINS, fitPicture, hash, skyFor } from './room.js';
+import { DROP_BANNER, dropActive, dropHat, dropMapFlock, EYES, FABRICS, HAIRS, LEGS, SKINS, fitPicture, hash, skyFor, stepDropMapFlock } from './room.js';
 import { paintOutsideGround, paintOutsideStanding } from './outside-art.js';
 import { doorPoint } from './outside-building.js';
 import { doorSideOf, keyOf } from './outside-spec.js';
@@ -3176,6 +3176,13 @@ const BOT_HATS = {
     ell(g, '#ff6f8c', cx - 2.2, hy - 4.5, 2.4, 0.7);
     ell(g, '#8be0ff', cx + 2.2, hy - 4.5, 2.4, 0.7);
   },
+  turkey: (g, cx, hy, hw) => {
+    fp(g, '#f6d98a', [[cx - hw * 0.55, hy + 0.2], [cx, hy - 6.2], [cx + hw * 0.55, hy + 0.2]]);
+    fp(g, '#e8802a', [[cx - hw * 0.4, hy], [cx, hy - 5], [cx + hw * 0.4, hy]]);
+    rfill(g, '#6b4628', cx - hw * 0.42, hy - 3.2, hw * 0.84, 3.4, 1.4, INK);
+    ell(g, '#d4402e', cx + 1.4, hy - 0.4, 0.7, 1.1);
+    ell(g, '#f6d98a', cx + 0.2, hy - 1.2, 1.1, 0.5);
+  },
 };
 // On the dark plate on a bot's chest. Lights are what it has with nothing chosen.
 const BOT_CHESTS = {
@@ -3504,10 +3511,11 @@ function drawBot(g, o) {
 }
 
 function botSprite(o) {
-  const key = `bot:${o.color}:${o.look}:${o.eyes}:${o.chest}:${o.hat}:${o.back}:${o.flip}:${o.step}:${o.arms}:${o.shut}:${o.sitting}:${o.tilt}`;
+  const hat = dropHat(o.hat);
+  const key = `bot:${o.color}:${o.look}:${o.eyes}:${o.chest}:${hat}:${o.back}:${o.flip}:${o.step}:${o.arms}:${o.shut}:${o.sitting}:${o.tilt}`;
   return sprite(key, 34, 46, 17, 41, (g) => {
     if (o.flip) g.scale(-1, 1);
-    drawBot(g, o);
+    drawBot(g, { ...o, hat });
   });
 }
 
@@ -4580,6 +4588,7 @@ export class World {
     this.researchLabs = new Set();
     this.outsideRows = [];
     this.pets = new Map();
+    this.dropFlock = [];
     this.puffs = [];
     this.ents = [];
     this.time = 0;
@@ -5233,6 +5242,7 @@ export class World {
     this.chunks.clear();
     this.players.clear();
     this.frogs.clear();
+    this.dropFlock = [];
     this.people.clear();
     this.visitors.clear();
     this.stopFollow('other');
@@ -5419,6 +5429,7 @@ export class World {
     const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
     let text = `${name}, ${stage} with ${size}.`;
     if (list) text += ` On the street: ${list}.`;
+    if (dropActive()) text += ` ${DROP_BANNER}.`;
     if (text !== this.label) {
       this.label = text;
       this.canvas.setAttribute('aria-label', text);
@@ -6540,6 +6551,7 @@ export class World {
     this.updatePlayers(dt);
     this.updateFrogs(dt);
     this.updatePets(dt);
+    this.syncDropFlock(dt);
     for (let i = this.puffs.length - 1; i >= 0; i--) {
       const p = this.puffs[i];
       p.life += dt;
@@ -6548,6 +6560,16 @@ export class World {
       p.vy += 4 * dt;
       if (p.life >= p.max) this.puffs.splice(i, 1);
     }
+  }
+
+  syncDropFlock(dt) {
+    const now = Date.now();
+    if (!dropActive(now) || !this.n) {
+      this.dropFlock = [];
+      return;
+    }
+    if (!this.dropFlock.length) this.dropFlock = dropMapFlock(now, this.n);
+    if (!this.calm) stepDropMapFlock(this.dropFlock, dt, this.n);
   }
 
   // E20, E21: a pet is told only what anyone can see on this map, and only while it's on screen.
@@ -7176,6 +7198,10 @@ export class World {
         if (inView(p.sx, p.sy) && ready(p.sx, p.sy)) ents.push(p);
       }
     }
+    for (const bird of this.dropFlock) {
+      place(bird, ...screenOf(bird.px, bird.py));
+      if (inView(bird.sx, bird.sy) && ready(bird.sx, bird.sy)) ents.push(bird);
+    }
     for (const a of this.anims.values()) {
       const [X, Y] = screenOf(a.x + 0.5, a.y + 0.5);
       a.sx = X;
@@ -7200,6 +7226,9 @@ export class World {
           r4 = drawFrog(bg, e, t, this.time, this.hoverEnt === e, this.calm);
           break;
         case 'pet':
+          r4 = drawPet(bg, e, t, this.calm);
+          break;
+        case 'drop_turkey':
           r4 = drawPet(bg, e, t, this.calm);
           break;
         default:
@@ -7251,7 +7280,7 @@ export class World {
   // Anything standing in front of a figure is painted over it again, so people walk behind houses.
   occlude(bg, e, r) {
     const n = this.n;
-    const tile = e.type === 'player' || e.type === 'frog' || e.type === 'visitor' || e.type === 'person' || e.type === 'pet';
+    const tile = e.type === 'player' || e.type === 'frog' || e.type === 'visitor' || e.type === 'person' || e.type === 'pet' || e.type === 'drop_turkey';
     const tx = tile ? Math.floor(e.px) : e.x;
     const ty = tile ? Math.floor(e.py) : e.y;
     // A pet that's gone round the back of its own building is behind it (E19).

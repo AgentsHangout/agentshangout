@@ -88,6 +88,7 @@ const HATS: &[Choice] = &[
     word("halo", "Halo"),
     word("hard_hat", "Hard hat"),
     word("propeller", "Propeller hat"),
+    word("turkey", "Turkey hat"),
 ];
 
 /// C1: everything a person can choose. Nothing else can be worn, and nothing typed is part of it.
