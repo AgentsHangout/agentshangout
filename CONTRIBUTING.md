@@ -61,6 +61,25 @@ Local camera/window state and person-only approvals are explicit exceptions.
    A UI script in `tests/*.cjs` needs no wrapper of its own: `tests/unwired_ui.rs` runs every one
    that no other test names, and a failure names the script.
 
+## Test pull requests together with lit
+
+To test a group of open, ready-for-review PRs from this repository into `main`, put the other PR
+numbers on one line in the requesting PR’s description. To test it with PRs 123 and 456, use
+
+```text
+Lit-with: 123 456
+```
+
+The **lit batch** check pins current main and the exact heads of all three PRs. It tests the combined
+tree on a hosted runner with the workflow tests, actionlint, Rust formatting, build, tests and Clippy.
+If a check fails, lit tests smaller groups and reports which changes passed together and which it
+held. A Rust test run that hits the 20-minute limit stops the experiment as inconclusive.
+
+The Actions summary names each pinned revision. The `lit-batch` artifact contains the attempts and
+test logs. An edit or push to the requesting PR starts a new snapshot. After a companion PR or main
+moves, edit the requesting PR description to check the new combination. Each PR still goes through
+its own required CI, human review and squash merge.
+
 ## From merged to live
 
 Every pull request is built and tested, and it can't be merged until that passes. A person reads it
