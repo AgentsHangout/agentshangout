@@ -88,7 +88,18 @@ jobs:
             exit 0
           fi
           live=$(gh release view --json tagName --jq .tagName)
-          order=$(gh api "repos/$GH_REPO/compare/$live...$GITHUB_SHA" --jq .status)
+          # GitHub's compare API sometimes answers 500 under load, so try a few times before
+          # giving up. A real answer, even "behind" or "diverged", ends the loop at once.
+          order=""
+          for try in 1 2 3; do
+            order=$(gh api "repos/$GH_REPO/compare/$live...$GITHUB_SHA" --jq .status) && break
+            order=""
+            if [ "$try" -lt 3 ]; then sleep 10; fi
+          done
+          if [ -z "$order" ]; then
+            echo "::error::Not installing $TAG: GitHub would not say how this commit compares with $live, which is live, after 3 tries."
+            exit 1
+          fi
           case "$order" in
             ahead | identical)
               echo "install=true" >> "$GITHUB_OUTPUT"
