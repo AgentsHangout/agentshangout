@@ -292,12 +292,19 @@ pub async fn run_task(
 /// Ends a worker and everything it started, which killing only the worker would leave running.
 async fn kill_tree(pid: Option<u32>) {
     let Some(pid) = pid else { return };
-    let pid = pid.to_string();
-    let _ = if cfg!(windows) {
-        Command::new("taskkill").args(["/PID", &pid, "/T", "/F"]).output().await
-    } else {
-        Command::new("kill").args(["-KILL", &format!("-{pid}")]).output().await
-    };
+    #[cfg(unix)]
+    {
+        use rustix::process::{kill_process_group, Pid, Signal};
+        // process_group(0) made the child the leader. Only a positive, non-init
+        // child PID can name a worker group without addressing other processes.
+        if let Some(group) = i32::try_from(pid).ok().and_then(Pid::from_raw) {
+            if group != Pid::INIT {
+                let _ = kill_process_group(group, Signal::KILL);
+            }
+        }
+    }
+    #[cfg(windows)]
+    let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output().await;
 }
 
 #[cfg(test)]
