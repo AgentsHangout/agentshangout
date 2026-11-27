@@ -50,6 +50,8 @@ jobs:
         shell: bash
         run: |
           cd "$RUNNER_TEMP/lit-batch"
+          # The candidate shell expands $1 and sends a copy to the live runner log on fd 3.
+          # shellcheck disable=SC2016
           lit run sources.json --repo repo.git --state state \
             --test bash -o pipefail -c 'bash "$1" 2>&1 | tee /dev/fd/3' \
               _ "$GITHUB_WORKSPACE/.github/scripts/check-lit-candidate.sh" 3>&1
