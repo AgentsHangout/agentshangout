@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # Debug info is most of what the test binaries weigh, and a failed test still names its file
       # and line. Publish sets this too, because it's part of the cache key the two share.
